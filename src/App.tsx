@@ -47,7 +47,7 @@ const Icon = ({ name, size = 16, className = "" }: { name: string, size?: number
   );
 };
 
-const ToonIcon = ({ size = 24 }: { size?: number }) => (
+const SochIcon = ({ size = 24 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#grad1)" />
     <path d="M7 8H17" stroke="white" strokeWidth="2" strokeLinecap="round" />
@@ -68,7 +68,7 @@ const TitleBar = () => {
   return (
     <div className="h-10 flex items-center justify-between select-none z-50 px-3 pt-3 app-region-drag" data-tauri-drag-region>
       <div className="flex items-center gap-3 pointer-events-none">
-        <ToonIcon size={20} />
+        <SochIcon size={20} />
         <span className="text-sm font-medium text-text-muted tracking-wide">SochDB Studio</span>
         <span className="bg-background-muted text-text-muted text-[10px] px-2 py-0.5 rounded-full border border-border-default">BETA</span>
       </div>
@@ -738,7 +738,7 @@ const ConnectionModal = ({ onConnect }: any) => {
         {/* Sidebar */}
         <div className="w-72 bg-background-muted/50 border-r border-border-default p-6 flex flex-col gap-2">
           <h2 className="text-lg font-bold text-text-default mb-6 flex items-center gap-2">
-            <ToonIcon size={24} /> SochDB
+            <SochIcon size={24} /> SochDB
           </h2>
           <button className="flex items-center gap-3 px-4 py-3 rounded-xl bg-background-app border border-border-accent text-text-default shadow-sm">
             <Icon name="database" size={18} className="text-teal" />
@@ -1266,7 +1266,7 @@ function App() {
             <header className="mb-6 flex justify-between items-start">
               <div>
                 <h1 className="text-3xl font-bold text-text-default mb-2">Console</h1>
-                <p className="text-text-muted">Interactive ToonQL REPL</p>
+                <p className="text-text-muted">Interactive SochQL REPL</p>
               </div>
               <button
                 onClick={createSampleData}

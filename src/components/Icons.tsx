@@ -1,5 +1,5 @@
 // Simple Icon component - uses custom TD cartoon for branding, emoji for everything else
-export const ToonIcon = ({ size = 24, className = "" }: { size?: number; className?: string }) => (
+export const SochIcon = ({ size = 24, className = "" }: { size?: number; className?: string }) => (
     <div
         className={`inline-block ${className}`}
         style={{ width: size, height: size }}

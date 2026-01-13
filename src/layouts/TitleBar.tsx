@@ -1,7 +1,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minimize, Maximize, X } from 'lucide-react';
 
-export const ToonIcon = ({ size = 24 }: { size?: number }) => (
+export const SochIcon = ({ size = 24 }: { size?: number }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <rect x="2" y="2" width="20" height="20" rx="6" fill="url(#grad1)" />
         <path d="M7 8H17" stroke="white" strokeWidth="2" strokeLinecap="round" />
@@ -20,7 +20,7 @@ export const TitleBar = () => {
     return (
         <div className="h-10 w-full flex items-center justify-between select-none z-50 px-3 pt-3 cursor-default" data-tauri-drag-region>
             <div className="flex items-center gap-3 pointer-events-none">
-                <ToonIcon size={20} />
+                <SochIcon size={20} />
                 <span className="text-sm font-medium text-text-muted tracking-wide">SochDB Studio</span>
                 <span className="bg-background-muted text-text-muted text-[10px] px-2 py-0.5 rounded-full border border-border-default">BETA</span>
             </div>

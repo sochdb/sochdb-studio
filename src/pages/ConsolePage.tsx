@@ -169,7 +169,7 @@ export const ConsolePage = () => {
             <header className="mb-6 flex justify-between items-start">
                 <div>
                     <h1 className="text-3xl font-bold text-text-default mb-2">Console</h1>
-                    <p className="text-text-muted">Interactive ToonQL REPL</p>
+                    <p className="text-text-muted">Interactive SochQL REPL</p>
                 </div>
             </header>
             <div className="flex-1 glass-panel rounded-2xl flex flex-col overflow-hidden">

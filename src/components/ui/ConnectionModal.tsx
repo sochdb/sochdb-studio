@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { ToonIcon } from '../../layouts/TitleBar';
+import { SochIcon } from '../../layouts/TitleBar';
 import { Database, ArrowRight, Folder, Globe, AlertCircle } from 'lucide-react';
 
 interface ConnectionModalProps {
@@ -40,7 +40,7 @@ export const ConnectionModal = ({ onConnect, onCancel }: ConnectionModalProps) =
                 {/* Sidebar */}
                 <div className="w-72 bg-background-muted/50 border-r border-border-default p-6 flex flex-col gap-2">
                     <h2 className="text-lg font-bold text-text-default mb-6 flex items-center gap-2">
-                        <ToonIcon size={24} /> SochDB
+                        <SochIcon size={24} /> SochDB
                     </h2>
                     <button
                         onClick={() => setMode('embedded')}
