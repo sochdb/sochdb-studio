@@ -1,5 +1,5 @@
 /**
- * ToonDB Hook - Interface to ToonDB backend
+ * SochDB Hook - Interface to SochDB backend
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -76,7 +76,7 @@ export interface ConnectionInfo {
 }
 
 // Hook implementation
-export function useToonDB() {
+export function useSochDB() {
     // Query operations
     const executeQuery = async (query: string): Promise<QueryResult> => {
         return invoke<QueryResult>('execute_query', { query });
@@ -166,4 +166,4 @@ export function useToonDB() {
     };
 }
 
-export default useToonDB;
+export default useSochDB;

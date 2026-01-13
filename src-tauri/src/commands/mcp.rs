@@ -5,7 +5,7 @@ use tauri::State;
 use std::sync::Arc;
 
 use crate::state::AppState;
-use toondb_mcp::RpcRequest;
+use sochdb_mcp::RpcRequest;
 
 /// List available MCP tools
 #[tauri::command]

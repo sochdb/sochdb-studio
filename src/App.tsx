@@ -69,7 +69,7 @@ const TitleBar = () => {
     <div className="h-10 flex items-center justify-between select-none z-50 px-3 pt-3 app-region-drag" data-tauri-drag-region>
       <div className="flex items-center gap-3 pointer-events-none">
         <ToonIcon size={20} />
-        <span className="text-sm font-medium text-text-muted tracking-wide">ToonDB Studio</span>
+        <span className="text-sm font-medium text-text-muted tracking-wide">SochDB Studio</span>
         <span className="bg-background-muted text-text-muted text-[10px] px-2 py-0.5 rounded-full border border-border-default">BETA</span>
       </div>
 
@@ -156,7 +156,7 @@ const Sidebar = ({ activeTab, setActiveTab, connected }: { activeTab: string, se
       </nav>
 
       <div className="mt-auto px-2 py-4 border-t border-border-default">
-        <p className="text-[10px] text-center text-text-muted opacity-50">ToonDB Studio © 2024</p>
+        <p className="text-[10px] text-center text-text-muted opacity-50">SochDB Studio © 2024</p>
       </div>
     </div>
   );
@@ -439,7 +439,7 @@ const AssistantView = () => {
       const apiMessages = [
         {
           role: 'system',
-          content: `You are a helpful AI assistant with access to ToonDB - an AI-native embedded database.
+          content: `You are a helpful AI assistant with access to SochDB - an AI-native embedded database.
 You can use the available tools to query the database, get/put/delete data, and help users manage their data.
 When the user asks about data, use the appropriate tools. Always be helpful and explain what you're doing.`,
         },
@@ -468,7 +468,7 @@ When the user asks about data, use the appropriate tools. Always be helpful and 
     <div className="flex flex-col h-full animate-in p-8">
       <header className="mb-6">
         <h1 className="text-3xl font-bold text-text-default mb-2">AI Assistant</h1>
-        <p className="text-text-muted">Chat with AI to query and manage your ToonDB data</p>
+        <p className="text-text-muted">Chat with AI to query and manage your SochDB data</p>
       </header>
 
       <div className="flex-1 glass-panel rounded-2xl flex flex-col overflow-hidden">
@@ -573,8 +573,8 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
 
   const mcpConfig = {
     mcpServers: {
-      toondb: {
-        command: "/path/to/toondb-mcp",
+      sochdb: {
+        command: "/path/to/sochdb-mcp",
         args: ["--db", "/path/to/data"]
       }
     }
@@ -623,7 +623,7 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
           <div className="space-y-6">
             <div className="p-6 rounded-xl border border-border-default bg-background-muted/30">
               <h3 className="text-lg font-semibold text-text-default mb-2">Theme</h3>
-              <p className="text-sm text-text-muted mb-4">Customize the look and feel of ToonDB Studio</p>
+              <p className="text-sm text-text-muted mb-4">Customize the look and feel of SochDB Studio</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => setTheme('light')}
@@ -675,7 +675,7 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
             <div className="p-6 border-b border-border-default flex items-start justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-text-default mb-1">MCP Configuration</h3>
-                <p className="text-sm text-text-muted">Connect ToonDB to Claude, Cursor, or other AI agents.</p>
+                <p className="text-sm text-text-muted">Connect SochDB to Claude, Cursor, or other AI agents.</p>
               </div>
               <button
                 onClick={copyConfig}
@@ -696,10 +696,10 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
         {/* About Tab */}
         {activeSettingsTab === 'about' && (
           <div className="p-6 rounded-xl border border-border-default bg-background-muted/30">
-            <h3 className="text-lg font-semibold text-text-default mb-4">About ToonDB Studio</h3>
+            <h3 className="text-lg font-semibold text-text-default mb-4">About SochDB Studio</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between"><span className="text-text-muted">Version</span><span className="text-text-default font-mono">0.1.0-alpha</span></div>
-              <div className="flex justify-between"><span className="text-text-muted">Engine</span><span className="text-text-default font-mono">ToonDB Core</span></div>
+              <div className="flex justify-between"><span className="text-text-muted">Engine</span><span className="text-text-default font-mono">SochDB Core</span></div>
               <div className="flex justify-between"><span className="text-text-muted">Build</span><span className="text-text-default font-mono">2024.12.08</span></div>
             </div>
           </div>
@@ -738,7 +738,7 @@ const ConnectionModal = ({ onConnect }: any) => {
         {/* Sidebar */}
         <div className="w-72 bg-background-muted/50 border-r border-border-default p-6 flex flex-col gap-2">
           <h2 className="text-lg font-bold text-text-default mb-6 flex items-center gap-2">
-            <ToonIcon size={24} /> ToonDB
+            <ToonIcon size={24} /> SochDB
           </h2>
           <button className="flex items-center gap-3 px-4 py-3 rounded-xl bg-background-app border border-border-accent text-text-default shadow-sm">
             <Icon name="database" size={18} className="text-teal" />
@@ -760,7 +760,7 @@ const ConnectionModal = ({ onConnect }: any) => {
         <div className="flex-1 p-8 flex flex-col bg-mesh relative">
           <div className="mb-8">
             <h1 className="text-2xl font-bold text-text-default mb-2">Connect to Database</h1>
-            <p className="text-text-muted">Select a directory to initialize or load a ToonDB instance.</p>
+            <p className="text-text-muted">Select a directory to initialize or load a SochDB instance.</p>
           </div>
 
           <div className="space-y-4 max-w-lg">
@@ -808,7 +808,7 @@ function App() {
   // Console state
   const [consoleInput, setConsoleInput] = useState('');
   const [consoleHistory, setConsoleHistory] = useState<{ type: 'input' | 'output' | 'error', text: string }[]>([
-    { type: 'output', text: 'Welcome to ToonDB Console. Type \'help\' for available commands.' }
+    { type: 'output', text: 'Welcome to SochDB Console. Type \'help\' for available commands.' }
   ]);
 
   // KV Explorer state
@@ -863,7 +863,7 @@ function App() {
   const loadTables = async () => {
     try {
       const res: any = await invoke('mcp_call_tool', {
-        toolName: 'toondb_list_tables',
+        toolName: 'sochdb_list_tables',
         arguments: {}
       });
       if (res && res.content) {
@@ -893,24 +893,24 @@ function App() {
     try {
       // Create users table with sample data
       await invoke('mcp_call_tool', {
-        toolName: 'toondb_put',
+        toolName: 'sochdb_put',
         arguments: { path: 'users/1', value: { id: 1, name: 'Alice', email: 'alice@example.com', role: 'admin' } }
       });
       await invoke('mcp_call_tool', {
-        toolName: 'toondb_put',
+        toolName: 'sochdb_put',
         arguments: { path: 'users/2', value: { id: 2, name: 'Bob', email: 'bob@example.com', role: 'user' } }
       });
       await invoke('mcp_call_tool', {
-        toolName: 'toondb_put',
+        toolName: 'sochdb_put',
         arguments: { path: 'users/3', value: { id: 3, name: 'Carol', email: 'carol@example.com', role: 'user' } }
       });
       // Create products table
       await invoke('mcp_call_tool', {
-        toolName: 'toondb_put',
+        toolName: 'sochdb_put',
         arguments: { path: 'products/1', value: { id: 1, name: 'Widget', price: 29.99, stock: 100 } }
       });
       await invoke('mcp_call_tool', {
-        toolName: 'toondb_put',
+        toolName: 'sochdb_put',
         arguments: { path: 'products/2', value: { id: 2, name: 'Gadget', price: 49.99, stock: 50 } }
       });
       setConsoleHistory(prev => [...prev,
@@ -940,7 +940,7 @@ function App() {
 
     try {
       const scanRes: any = await invoke('mcp_call_tool', {
-        toolName: 'toondb_query',
+        toolName: 'sochdb_query',
         arguments: { query: `SELECT * FROM ${table}`, limit: 50, format: 'json' }
       });
 
@@ -986,7 +986,7 @@ function App() {
     setSelectedKey(key);
     try {
       const res: any = await invoke('mcp_call_tool', {
-        toolName: 'toondb_get',
+        toolName: 'sochdb_get',
         arguments: { path: key }
       });
       if (res && res.content) {
@@ -1002,7 +1002,7 @@ function App() {
     if (!consoleInput.trim()) return;
 
     const cmd = consoleInput.trim();
-    setConsoleHistory(prev => [...prev, { type: 'input', text: `toondb> ${cmd}` }]);
+    setConsoleHistory(prev => [...prev, { type: 'input', text: `sochdb> ${cmd}` }]);
     setConsoleInput('');
 
     // Parse and execute command
@@ -1032,7 +1032,7 @@ function App() {
 
         case 'list':
           const listRes: any = await invoke('mcp_call_tool', {
-            toolName: 'toondb_list_tables',
+            toolName: 'sochdb_list_tables',
             arguments: {}
           });
           const rawListOutput = listRes?.content?.[0]?.text || '';
@@ -1054,7 +1054,7 @@ function App() {
             result = 'Usage: get <path>';
           } else {
             const getRes: any = await invoke('mcp_call_tool', {
-              toolName: 'toondb_get',
+              toolName: 'sochdb_get',
               arguments: { path: parts[1] }
             });
             result = getRes?.content?.[0]?.text || 'Not found';
@@ -1069,7 +1069,7 @@ function App() {
             const valueStr = parts.slice(2).join(' ');
             const value = JSON.parse(valueStr);
             await invoke('mcp_call_tool', {
-              toolName: 'toondb_put',
+              toolName: 'sochdb_put',
               arguments: { path, value }
             });
             result = `✓ Stored at ${path}`;
@@ -1081,7 +1081,7 @@ function App() {
             result = 'Usage: delete <path>';
           } else {
             await invoke('mcp_call_tool', {
-              toolName: 'toondb_delete',
+              toolName: 'sochdb_delete',
               arguments: { path: parts[1] }
             });
             result = `✓ Deleted ${parts[1]}`;
@@ -1093,7 +1093,7 @@ function App() {
             result = 'Usage: describe <table>';
           } else {
             const descRes: any = await invoke('mcp_call_tool', {
-              toolName: 'toondb_describe',
+              toolName: 'sochdb_describe',
               arguments: { table: parts[1] }
             });
             result = descRes?.content?.[0]?.text || 'Table not found';
@@ -1106,7 +1106,7 @@ function App() {
           } else {
             const queryStr = parts.slice(1).join(' ');
             const queryRes: any = await invoke('mcp_call_tool', {
-              toolName: 'toondb_query',
+              toolName: 'sochdb_query',
               arguments: { query: queryStr }
             });
             result = queryRes?.content?.[0]?.text || 'No results';
@@ -1120,7 +1120,7 @@ function App() {
         default:
           // Try as a query
           const defaultRes: any = await invoke('mcp_call_tool', {
-            toolName: 'toondb_query',
+            toolName: 'sochdb_query',
             arguments: { query: cmd }
           });
           result = defaultRes?.content?.[0]?.text || 'Unknown command. Type "help" for available commands.';
@@ -1290,7 +1290,7 @@ function App() {
               {/* Input area */}
               <div className="border-t border-border-default bg-background-muted/30 p-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-teal font-mono">toondb&gt;</span>
+                  <span className="text-teal font-mono">sochdb&gt;</span>
                   <input
                     type="text"
                     value={consoleInput}
@@ -1315,7 +1315,7 @@ function App() {
           <div className="flex flex-col h-full animate-in p-8">
             <header className="mb-6">
               <h1 className="text-3xl font-bold text-text-default mb-2">KV Explorer</h1>
-              <p className="text-text-muted">Browse key-value pairs stored in ToonDB</p>
+              <p className="text-text-muted">Browse key-value pairs stored in SochDB</p>
             </header>
             <div className="flex-1 glass-panel rounded-2xl overflow-hidden flex">
               {/* Keys panel */}

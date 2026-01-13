@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    toondb_studio_lib::run()
+    sochdb_studio_lib::run()
 }

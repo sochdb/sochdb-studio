@@ -2,7 +2,7 @@
  * Query Store - Global query state
  */
 
-import { QueryResult } from '../hooks/useToonDB';
+import { QueryResult } from '../hooks/useSochDB';
 import { QueryHistoryEntry } from '../hooks/useQuery';
 
 class QueryStore {

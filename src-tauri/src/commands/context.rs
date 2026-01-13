@@ -58,7 +58,7 @@ pub struct RecipeDetail {
     pub name: String,
     pub version: String,
     pub description: String,
-    pub query_text: String, // ToonQL representation
+    pub query_text: String, // SochQL representation
     pub sections: Vec<SectionSummary>,
     pub token_budget: usize,
     pub session_binding: Option<String>,

@@ -341,7 +341,7 @@ pub async fn chat_completion(
             // Call MCP tool
             let mcp_lock = state.mcp_server.read().await;
             if let Some(mcp) = mcp_lock.as_ref() {
-                let mcp_req = toondb_mcp::RpcRequest {
+                let mcp_req = sochdb_mcp::RpcRequest {
                     jsonrpc: "2.0".to_string(),
                     id: Value::Number(1.into()),
                     method: "tools/call".to_string(),
@@ -406,7 +406,7 @@ async fn get_openai_tools(state: &State<'_, Arc<AppState>>) -> Result<Vec<Value>
     };
     
     // Get tools list
-    let req = toondb_mcp::RpcRequest {
+    let req = sochdb_mcp::RpcRequest {
         jsonrpc: "2.0".to_string(),
         id: Value::Number(1.into()),
         method: "tools/list".to_string(),

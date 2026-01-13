@@ -1,11 +1,11 @@
-//! ToonQL parser for ToonDB-specific query syntax
+//! SochQL parser for SochDB-specific query syntax
 
 use serde::{Deserialize, Serialize};
 
-/// ToonQL statement type
+/// SochQL statement type
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ToonQlStatement {
+pub enum SochQlStatement {
     /// VECTOR_SEARCH table USING column NEAR query LIMIT n
     VectorSearch {
         table: String,
@@ -36,9 +36,9 @@ pub enum VectorQuery {
     Vector(Vec<f32>),
 }
 
-/// Parse a ToonQL query string
+/// Parse a SochQL query string
 #[allow(dead_code)]
-pub fn parse_toonql(query: &str) -> Result<ToonQlStatement, String> {
+pub fn parse_sochql(query: &str) -> Result<SochQlStatement, String> {
     let query = query.trim();
     let upper = query.to_uppercase();
 
@@ -53,12 +53,12 @@ pub fn parse_toonql(query: &str) -> Result<ToonQlStatement, String> {
     } else if upper.starts_with("SCAN ") {
         parse_scan(query)
     } else {
-        Ok(ToonQlStatement::Unknown(query.to_string()))
+        Ok(SochQlStatement::Unknown(query.to_string()))
     }
 }
 
 #[allow(dead_code)]
-fn parse_vector_search(input: &str) -> Result<ToonQlStatement, String> {
+fn parse_vector_search(input: &str) -> Result<SochQlStatement, String> {
     let upper = input.to_uppercase();
     
     // Extract table name (after VECTOR_SEARCH)
@@ -103,7 +103,7 @@ fn parse_vector_search(input: &str) -> Result<ToonQlStatement, String> {
         10
     };
 
-    Ok(ToonQlStatement::VectorSearch {
+    Ok(SochQlStatement::VectorSearch {
         table,
         column,
         query: vector_query,
@@ -113,14 +113,14 @@ fn parse_vector_search(input: &str) -> Result<ToonQlStatement, String> {
 }
 
 #[allow(dead_code)]
-fn parse_get(query: &str) -> Result<ToonQlStatement, String> {
+fn parse_get(query: &str) -> Result<SochQlStatement, String> {
     let after_get = &query[4..].trim();
     let path = extract_quoted_string(after_get)?;
-    Ok(ToonQlStatement::Get { path })
+    Ok(SochQlStatement::Get { path })
 }
 
 #[allow(dead_code)]
-fn parse_put(query: &str) -> Result<ToonQlStatement, String> {
+fn parse_put(query: &str) -> Result<SochQlStatement, String> {
     let after_put = &query[4..].trim();
     
     // Find the '=' separator
@@ -129,21 +129,21 @@ fn parse_put(query: &str) -> Result<ToonQlStatement, String> {
     let path = extract_quoted_string(&after_put[..eq_idx].trim())?;
     let value = after_put[eq_idx + 1..].trim().to_string();
     
-    Ok(ToonQlStatement::Put { path, value })
+    Ok(SochQlStatement::Put { path, value })
 }
 
 #[allow(dead_code)]
-fn parse_delete(query: &str) -> Result<ToonQlStatement, String> {
+fn parse_delete(query: &str) -> Result<SochQlStatement, String> {
     let after_delete = &query[7..].trim();
     let path = extract_quoted_string(after_delete)?;
-    Ok(ToonQlStatement::Delete { path })
+    Ok(SochQlStatement::Delete { path })
 }
 
 #[allow(dead_code)]
-fn parse_scan(query: &str) -> Result<ToonQlStatement, String> {
+fn parse_scan(query: &str) -> Result<SochQlStatement, String> {
     let after_scan = &query[5..].trim();
     let prefix = extract_quoted_string(after_scan)?;
-    Ok(ToonQlStatement::Scan { prefix })
+    Ok(SochQlStatement::Scan { prefix })
 }
 
 #[allow(dead_code)]
@@ -163,10 +163,10 @@ mod tests {
 
     #[test]
     fn test_parse_get() {
-        let result = parse_toonql("GET 'config/settings/theme'");
+        let result = parse_sochql("GET 'config/settings/theme'");
         assert!(result.is_ok());
         
-        if let ToonQlStatement::Get { path } = result.unwrap() {
+        if let SochQlStatement::Get { path } = result.unwrap() {
             assert_eq!(path, "config/settings/theme");
         } else {
             panic!("Expected GET statement");
@@ -175,10 +175,10 @@ mod tests {
 
     #[test]
     fn test_parse_vector_search() {
-        let result = parse_toonql("VECTOR_SEARCH documents USING embedding NEAR 'machine learning' LIMIT 10");
+        let result = parse_sochql("VECTOR_SEARCH documents USING embedding NEAR 'machine learning' LIMIT 10");
         assert!(result.is_ok());
         
-        if let ToonQlStatement::VectorSearch { table, column, limit, .. } = result.unwrap() {
+        if let SochQlStatement::VectorSearch { table, column, limit, .. } = result.unwrap() {
             assert_eq!(table, "documents");
             assert_eq!(column, "embedding");
             assert_eq!(limit, 10);

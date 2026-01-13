@@ -2,7 +2,7 @@
  * Schema Store - Global database schema state
  */
 
-import { DatabaseSchema } from '../hooks/useToonDB';
+import { DatabaseSchema } from '../hooks/useSochDB';
 
 class SchemaStore {
     private schema: DatabaseSchema | null = null;

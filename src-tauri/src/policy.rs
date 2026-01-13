@@ -1,4 +1,4 @@
-//! Command Policy System for ToonDB Studio
+//! Command Policy System for SochDB Studio
 //!
 //! Provides capability/policy-driven command exposure based on:
 //! - Connection type (local, remote, read-only)

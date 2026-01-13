@@ -3,10 +3,10 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useToonDB, DatabaseSchema, TableInfo } from './useToonDB';
+import { useSochDB, DatabaseSchema, TableInfo } from './useSochDB';
 
 export function useSchema() {
-    const { getSchema, getTableInfo } = useToonDB();
+    const { getSchema, getTableInfo } = useSochDB();
 
     const [schema, setSchema] = useState<DatabaseSchema | null>(null);
     const [isLoading, setIsLoading] = useState(false);

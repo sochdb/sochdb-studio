@@ -1,4 +1,4 @@
-//! SQL parser for ToonDB Studio
+//! SQL parser for SochDB Studio
 //!
 //! Provides a complete SQL parser for DML/DDL statements with proper AST generation.
 //! This is the unified parser used across Studio, MCP, and query engine.

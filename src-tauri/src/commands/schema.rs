@@ -62,7 +62,7 @@ pub async fn get_schema(
     let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized")?;
     
     // List tables via MCP
-    let req = toondb_mcp::RpcRequest {
+    let req = sochdb_mcp::RpcRequest {
         jsonrpc: "2.0".to_string(),
         id: serde_json::Value::Number(1.into()),
         method: "tools/call".to_string(),

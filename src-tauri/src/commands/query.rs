@@ -21,7 +21,7 @@ pub struct QueryStats {
     pub scanned_rows: usize,
 }
 
-/// Execute a SQL/ToonQL query
+/// Execute a SQL/SochQL query
 #[tauri::command]
 pub async fn execute_query(
     state: State<'_, Arc<AppState>>,
@@ -39,7 +39,7 @@ pub async fn execute_query(
     let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized")?;
     
     // Create query request
-    let req = toondb_mcp::RpcRequest {
+    let req = sochdb_mcp::RpcRequest {
         jsonrpc: "2.0".to_string(),
         id: serde_json::Value::Number(1.into()),
         method: "tools/call".to_string(),

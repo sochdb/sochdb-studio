@@ -16,13 +16,13 @@ export const defaultConnections: Connection[] = [
     {
         id: 'local-dev',
         name: 'Local Development',
-        path: './dev.toondb',
+        path: './dev.sochdb',
         status: 'connected',
     },
     {
         id: 'production',
         name: 'Production',
-        path: '/var/toondb/prod',
+        path: '/var/sochdb/prod',
         status: 'disconnected',
     },
     {

@@ -1,14 +1,14 @@
 [package]
-name = "toondb-studio"
+name = "sochdb-studio"
 version = "0.3.0"
-description = "ToonDB Studio - Database Administration Tool for ToonDB"
-authors = ["ToonDB Team"]
+description = "SochDB Studio - Database Administration Tool for SochDB"
+authors = ["SochDB Team"]
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 
 [lib]
-name = "toondb_studio_lib"
+name = "sochdb_studio_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -23,11 +23,11 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
 
-# ToonDB integration
-toondb = { version = "0.3.0", path = "../../toondb-client", features = ["embedded"] }
-toondb-core = { version = "0.3.0", path = "../../toondb-core" }
-toondb-storage = { version = "0.3.0", path = "../../toondb-storage" }
-toondb-mcp = { version = "0.3.0", path = "../../toondb-mcp" }
+# SochDB integration
+sochdb = { version = "0.4.0", path = "../../sochdb/sochdb-client", features = ["embedded"] }
+sochdb-core = { version = "0.4.0", path = "../../sochdb/sochdb-core" }
+sochdb-storage = { version = "0.4.0", path = "../../sochdb/sochdb-storage" }
+sochdb-mcp = { version = "0.4.0", path = "../../sochdb/sochdb-mcp" }
 
 # Async utilities
 parking_lot = "0.12"

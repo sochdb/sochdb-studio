@@ -1,4 +1,4 @@
-//! Connection manager for handling multiple ToonDB connections
+//! Connection manager for handling multiple SochDB connections
 
 use super::pool::ConnectionPool;
 use serde::{Deserialize, Serialize};
@@ -42,13 +42,13 @@ impl ConnectionManager {
                 SavedConnection {
                     id: "local-dev".to_string(),
                     name: "Local Development".to_string(),
-                    path: "./dev.toondb".to_string(),
+                    path: "./dev.sochdb".to_string(),
                     connection_type: ConnectionType::LocalFile,
                 },
                 SavedConnection {
                     id: "production".to_string(),
                     name: "Production".to_string(),
-                    path: "/var/toondb/prod".to_string(),
+                    path: "/var/sochdb/prod".to_string(),
                     connection_type: ConnectionType::LocalFile,
                 },
                 SavedConnection {

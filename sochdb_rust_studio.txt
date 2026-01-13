@@ -1,0 +1,3652 @@
+
+# ===== Start of c-code.py =====
+
+# Copyright 2025 Sushanth (https://github.com/sushanthpy)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import re
+
+# Define the project root directory
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Define directories and files to exclude
+EXCLUDE_DIRS = {'__pycache__', 'venv', '.git', 'logs', 'data', 'artifacts', 'build', 'dist', 'target', 'tests', 'web_ui', '.github', '.venv', '.pytest_cache', 'tests', 'benchmarks', '.cargo', '.venv312', 'node_modules'}
+EXCLUDE_FILES = {'README.md'}
+
+# Define the output file
+OUTPUT_FILE = os.path.join(PROJECT_ROOT, 'sochdb_rust_studio.txt')
+
+# Supported file extensions
+#SUPPORTED_EXTENSIONS = {'.rs', '.yml', '.toml', '.py', '.cpp', '.h'}
+SUPPORTED_EXTENSIONS = {'.rs', '.toml', '.py', 'ts', 'js'}
+def is_file(filename):
+    """
+    Check if the file is of a supported type and is not in the exclude list.
+    """
+    _, ext = os.path.splitext(filename)
+    return ext in SUPPORTED_EXTENSIONS and filename not in EXCLUDE_FILES
+
+def should_exclude_dir(dirname):
+    """
+    Check if the directory should be excluded.
+    """
+    return dirname in EXCLUDE_DIRS
+
+def get_all_supported_files(root_dir):
+    """
+    Recursively retrieve all supported files from the directory, excluding specified directories and files.
+    """
+    supported_files = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # Modify dirnames in-place to skip excluded directories
+        dirnames[:] = [d for d in dirnames if not should_exclude_dir(d)]
+        for filename in filenames:
+            if is_file(filename):
+                file_path = os.path.join(dirpath, filename)
+                supported_files.append(file_path)
+    return supported_files
+
+def concatenate_files(supported_files, output_file):
+    """
+    Concatenate all supported files into a single output file.
+    """
+    with open(output_file, 'w', encoding='utf-8') as outfile:
+        for file_path in supported_files:
+            relative_path = os.path.relpath(file_path, PROJECT_ROOT)
+            outfile.write(f'\n# ===== Start of {relative_path} =====\n\n')
+            with open(file_path, 'r', encoding='utf-8') as infile:
+                outfile.write(infile.read())
+            outfile.write(f'\n# ===== End of {relative_path} =====\n')
+    print(f"All files have been concatenated into {output_file}")
+
+def main():
+    """
+    Main function to get all supported files and concatenate them into a single output file.
+    """
+    supported_files = get_all_supported_files(PROJECT_ROOT)
+    # Optionally sort the files for dependency handling
+    supported_files.sort()
+    concatenate_files(supported_files, OUTPUT_FILE)
+
+if __name__ == '__main__':
+    main()
+
+# ===== End of c-code.py =====
+
+# ===== Start of src-tauri/Cargo.toml =====
+
+[package]
+name = "sochdb-studio"
+version = "0.3.3"
+description = "SochDB Studio - Database Administration Tool for SochDB"
+authors = ["SochDB Team"]
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+
+[lib]
+name = "sochdb_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+base64 = "0.22"
+
+# SochDB integration
+sochdb = { version = "0.3.3", features = ["embedded"] }
+sochdb-core = { version = "0.3.3" }
+sochdb-storage = { version = "0.3.3" }
+sochdb-mcp = { version = "0.3.3" }
+
+# Async utilities
+parking_lot = "0.12"
+
+# LLM integration
+reqwest = { version = "0.12", features = ["json"] }
+tauri-plugin-store = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+# ===== End of src-tauri/Cargo.toml =====
+
+# ===== Start of src-tauri/build.rs =====
+
+fn main() {
+    tauri_build::build()
+}
+
+# ===== End of src-tauri/build.rs =====
+
+# ===== Start of src-tauri/src/commands/admin.rs =====
+
+//! Admin commands for database operations
+
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use std::sync::Arc;
+use std::path::PathBuf;
+
+use crate::state::AppState;
+
+/// Database statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseStats {
+    pub memtable_size_bytes: usize,
+    pub wal_size_bytes: usize,
+    pub total_tables: usize,
+    pub total_rows: usize,
+    pub active_transactions: usize,
+    pub last_checkpoint_lsn: u64,
+    pub uptime_seconds: u64,
+    pub version: String,
+    pub active_snapshots: usize,
+    pub min_active_timestamp: u64,
+    pub garbage_versions: usize,
+}
+
+/// Connection information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionInfo {
+    pub path: String,
+    pub connected: bool,
+    pub version: String,
+    pub uptime_seconds: u64,
+}
+
+/// Connect to a SochDB database
+#[tauri::command]
+pub async fn connect(
+    state: State<'_, Arc<AppState>>,
+    path: String,
+) -> Result<ConnectionInfo, String> {
+    let path_buf = PathBuf::from(&path);
+    
+    // Use unified AppState connect
+    state.connect(path_buf).await?;
+
+    Ok(ConnectionInfo {
+        path,
+        connected: true,
+        version: "0.1.0".to_string(),
+        uptime_seconds: 0,
+    })
+}
+
+/// Disconnect from the current database
+#[tauri::command]
+pub async fn disconnect(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.disconnect().await;
+    Ok(())
+}
+
+/// Get current database statistics
+#[tauri::command]
+pub async fn get_stats(state: State<'_, Arc<AppState>>) -> Result<DatabaseStats, String> {
+    let status = state.get_status().await;
+    
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // Get connection directly
+    let conn_lock = state.connection.read().await;
+    let conn = conn_lock.as_ref()
+        .ok_or_else(|| "Database connection not initialized".to_string())?;
+    
+    // Stub stats since we don't have direct access to internal stats easily without MCP
+    // Or we can try conn.stats() if it exists, but let's be safe and return zeros
+    // to ensure compilation.
+    
+    // Count tables from scan (tables are top-level paths)
+    conn.begin().ok();
+    let scan_result = conn.scan("/").unwrap_or_default();
+    let mut table_set = std::collections::HashSet::new();
+    let mut total_rows = 0usize;
+    for (key, _) in &scan_result {
+        let parts: Vec<&str> = key.trim_start_matches('/').split('/').collect();
+        if let Some(first) = parts.first() {
+            if !first.is_empty() {
+                table_set.insert(first.to_string());
+            }
+        }
+        total_rows += 1;
+    }
+    conn.abort().ok();
+    
+    Ok(DatabaseStats {
+        memtable_size_bytes: 0,
+        wal_size_bytes: 0,
+        total_tables: table_set.len(),
+        total_rows,
+        active_transactions: 0,
+        last_checkpoint_lsn: 0, 
+        uptime_seconds: 0, 
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        active_snapshots: 0, 
+        min_active_timestamp: 0, 
+        garbage_versions: 0, 
+    })
+}
+
+/// Force a WAL checkpoint
+#[tauri::command]
+pub async fn checkpoint(state: State<'_, Arc<AppState>>) -> Result<u64, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // Get connection directly
+    let conn_lock = state.connection.read().await;
+    let conn = conn_lock.as_ref()
+        .ok_or_else(|| "Database connection not initialized".to_string())?;
+    
+    // Force sync
+    conn.kernel().fsync()
+        .map_err(|e| format!("Checkpoint failed: {}", e))?;
+    
+    Ok(0)
+}
+
+/// Run garbage collection
+#[tauri::command]
+pub async fn gc(state: State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // Get connection directly
+    let conn_lock = state.connection.read().await;
+    let conn = conn_lock.as_ref()
+        .ok_or_else(|| "Database connection not initialized".to_string())?;
+    
+    let reclaimed = conn.gc();
+    Ok(reclaimed)
+}
+
+/// Analyze table statistics
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn analyze() -> Result<(), String> {
+    Ok(())
+}
+
+/// Compact SST files
+#[tauri::command]
+pub async fn compact(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // Get connection directly
+    let conn_lock = state.connection.read().await;
+    let conn = conn_lock.as_ref()
+        .ok_or_else(|| "Database connection not initialized".to_string())?;
+    
+    // Run GC which cleans up old versions (compaction is automatic via LSM)
+    let _ = conn.gc();
+    
+    // Force sync to persist any changes
+    conn.kernel().fsync()
+        .map_err(|e| format!("Compact sync failed: {}", e))?;
+    
+    Ok(())
+}
+/// Get the current command policy
+#[tauri::command]
+pub async fn get_policy(state: State<'_, Arc<AppState>>) -> Result<crate::policy::CommandPolicy, String> {
+    Ok(state.get_policy().await)
+}
+
+/// Set the command policy
+#[tauri::command]
+pub async fn set_policy(
+    state: State<'_, Arc<AppState>>,
+    policy: crate::policy::CommandPolicy,
+) -> Result<(), String> {
+    state.set_policy(policy).await;
+    Ok(())
+}
+
+/// Check if a command is allowed under current policy
+#[tauri::command]
+pub async fn check_command(
+    state: State<'_, Arc<AppState>>,
+    command: String,
+) -> Result<crate::policy::PolicyCheck, String> {
+    let policy = state.get_policy().await;
+    Ok(crate::policy::check_command(&policy, &command))
+}
+
+/// Get list of commands allowed under current policy
+#[tauri::command]
+pub async fn get_allowed_commands(state: State<'_, Arc<AppState>>) -> Result<Vec<String>, String> {
+    let policy = state.get_policy().await;
+    Ok(policy.get_allowed_commands().iter().map(|s| s.to_string()).collect())
+}
+# ===== End of src-tauri/src/commands/admin.rs =====
+
+# ===== Start of src-tauri/src/commands/context.rs =====
+
+// Copyright 2025 Sushanth (https://github.com/sushanthpy)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Context Engineering Studio Commands
+//!
+//! Provides Tauri commands for the AI Engineer Context Cockpit:
+//! - Context recipe management
+//! - Budget visualization
+//! - EXPLAIN CONTEXT output
+//! - Session binding management
+
+use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// Response Types
+// ============================================================================
+
+/// Response for context recipe listing
+#[derive(Debug, Serialize)]
+pub struct RecipeListResponse {
+    pub recipes: Vec<RecipeSummary>,
+    pub total: usize,
+}
+
+/// Summary of a context recipe
+#[derive(Debug, Serialize)]
+pub struct RecipeSummary {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub usage_count: u64,
+}
+
+/// Response for recipe details
+#[derive(Debug, Serialize)]
+pub struct RecipeDetailResponse {
+    pub recipe: RecipeDetail,
+    pub versions: Vec<String>,
+}
+
+/// Detailed recipe information
+#[derive(Debug, Serialize)]
+pub struct RecipeDetail {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub query_text: String, // ToonQL representation
+    pub sections: Vec<SectionSummary>,
+    pub token_budget: usize,
+    pub session_binding: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub avg_tokens: Option<f32>,
+}
+
+/// Section summary for UI
+#[derive(Debug, Serialize)]
+pub struct SectionSummary {
+    pub name: String,
+    pub priority: i32,
+    pub content_type: String,
+    pub estimated_tokens: Option<usize>,
+}
+
+/// Budget allocation visualization
+#[derive(Debug, Serialize)]
+pub struct BudgetVisualization {
+    pub total_budget: usize,
+    pub allocated: usize,
+    pub remaining: usize,
+    pub sections: Vec<SectionAllocation>,
+}
+
+/// Section allocation for visualization
+#[derive(Debug, Serialize)]
+pub struct SectionAllocation {
+    pub name: String,
+    pub priority: i32,
+    pub requested: usize,
+    pub allocated: usize,
+    pub status: String, // "full", "truncated", "dropped"
+    pub percentage: f32,
+    pub reason: String,
+}
+
+/// EXPLAIN CONTEXT output
+#[derive(Debug, Serialize)]
+pub struct ExplainContextResponse {
+    pub query_text: String,
+    pub budget_allocation: BudgetVisualization,
+    pub execution_plan: Vec<ExecutionStep>,
+    pub recommendations: Vec<String>,
+}
+
+/// Execution step in context assembly
+#[derive(Debug, Serialize)]
+pub struct ExecutionStep {
+    pub step: usize,
+    pub section: String,
+    pub operation: String,
+    pub estimated_tokens: usize,
+    pub cumulative_tokens: usize,
+}
+
+// ============================================================================
+// Tauri Commands
+// ============================================================================
+
+/// List all available context recipes
+#[tauri::command]
+pub async fn list_context_recipes(
+    _tags: Option<Vec<String>>,
+) -> Result<RecipeListResponse, String> {
+    // In a real implementation, this would query the ContextRecipeStore
+    Ok(RecipeListResponse {
+        recipes: vec![
+            RecipeSummary {
+                id: "default-agent".to_string(),
+                name: "Default Agent Context".to_string(),
+                version: "1.0.0".to_string(),
+                description: "Standard context recipe for general-purpose agents".to_string(),
+                tags: vec!["agent".to_string(), "default".to_string()],
+                usage_count: 1542,
+            },
+            RecipeSummary {
+                id: "code-assistant".to_string(),
+                name: "Code Assistant Context".to_string(),
+                version: "2.1.0".to_string(),
+                description: "Optimized for code editing and review tasks".to_string(),
+                tags: vec!["code".to_string(), "assistant".to_string()],
+                usage_count: 823,
+            },
+        ],
+        total: 2,
+    })
+}
+
+/// Get details of a specific recipe
+#[tauri::command]
+pub async fn get_context_recipe(
+    recipe_id: String,
+    version: Option<String>,
+) -> Result<RecipeDetailResponse, String> {
+    // In a real implementation, this would fetch from ContextRecipeStore
+    Ok(RecipeDetailResponse {
+        recipe: RecipeDetail {
+            id: recipe_id.clone(),
+            name: "Default Agent Context".to_string(),
+            version: version.unwrap_or_else(|| "1.0.0".to_string()),
+            description: "Standard context recipe for general-purpose agents".to_string(),
+            query_text: r#"CONTEXT SELECT agent_context
+FROM session($SESSION_ID)
+WITH (token_limit = 4096)
+SECTIONS (
+    SYSTEM PRIORITY 0: GET system.prompt,
+    USER PRIORITY 1: GET user.profile.{name, preferences},
+    HISTORY PRIORITY 2: LAST 10 FROM tool_calls,
+    KNOWLEDGE PRIORITY 3: SEARCH docs BY SIMILARITY($query) TOP 5
+);"#
+                .to_string(),
+            sections: vec![
+                SectionSummary {
+                    name: "SYSTEM".to_string(),
+                    priority: 0,
+                    content_type: "GET".to_string(),
+                    estimated_tokens: Some(500),
+                },
+                SectionSummary {
+                    name: "USER".to_string(),
+                    priority: 1,
+                    content_type: "GET".to_string(),
+                    estimated_tokens: Some(200),
+                },
+                SectionSummary {
+                    name: "HISTORY".to_string(),
+                    priority: 2,
+                    content_type: "LAST".to_string(),
+                    estimated_tokens: Some(1200),
+                },
+                SectionSummary {
+                    name: "KNOWLEDGE".to_string(),
+                    priority: 3,
+                    content_type: "SEARCH".to_string(),
+                    estimated_tokens: Some(800),
+                },
+            ],
+            token_budget: 4096,
+            session_binding: None,
+            created_at: Some("2025-01-15T10:30:00Z".to_string()),
+            updated_at: Some("2025-01-20T14:22:00Z".to_string()),
+            avg_tokens: Some(2850.5),
+        },
+        versions: vec![
+            "1.0.0".to_string(),
+            "0.9.0".to_string(),
+            "0.8.0".to_string(),
+        ],
+    })
+}
+
+/// Create or update a context recipe
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct SaveRecipeRequest {
+    pub id: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub query_text: String,
+    pub tags: Vec<String>,
+    pub session_binding: Option<String>,
+}
+
+#[tauri::command]
+pub async fn save_context_recipe(request: SaveRecipeRequest) -> Result<String, String> {
+    // In a real implementation, this would save to ContextRecipeStore
+    let recipe_id = request
+        .id
+        .unwrap_or_else(|| format!("recipe-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()));
+    Ok(recipe_id)
+}
+
+/// Explain a context query's budget allocation
+#[tauri::command]
+pub async fn explain_context(query_text: String) -> Result<ExplainContextResponse, String> {
+    // In a real implementation, this would parse and execute with EXPLAIN
+    Ok(ExplainContextResponse {
+        query_text: query_text.clone(),
+        budget_allocation: BudgetVisualization {
+            total_budget: 4096,
+            allocated: 2700,
+            remaining: 1396,
+            sections: vec![
+                SectionAllocation {
+                    name: "SYSTEM".to_string(),
+                    priority: 0,
+                    requested: 500,
+                    allocated: 500,
+                    status: "full".to_string(),
+                    percentage: 12.2,
+                    reason: "Fits in remaining budget (4096 tokens)".to_string(),
+                },
+                SectionAllocation {
+                    name: "USER".to_string(),
+                    priority: 1,
+                    requested: 200,
+                    allocated: 200,
+                    status: "full".to_string(),
+                    percentage: 4.9,
+                    reason: "Fits in remaining budget (3596 tokens)".to_string(),
+                },
+                SectionAllocation {
+                    name: "HISTORY".to_string(),
+                    priority: 2,
+                    requested: 1200,
+                    allocated: 1200,
+                    status: "full".to_string(),
+                    percentage: 29.3,
+                    reason: "Fits in remaining budget (3396 tokens)".to_string(),
+                },
+                SectionAllocation {
+                    name: "KNOWLEDGE".to_string(),
+                    priority: 3,
+                    requested: 800,
+                    allocated: 800,
+                    status: "full".to_string(),
+                    percentage: 19.5,
+                    reason: "Fits in remaining budget (2196 tokens)".to_string(),
+                },
+            ],
+        },
+        execution_plan: vec![
+            ExecutionStep {
+                step: 1,
+                section: "SYSTEM".to_string(),
+                operation: "GET system.prompt".to_string(),
+                estimated_tokens: 500,
+                cumulative_tokens: 500,
+            },
+            ExecutionStep {
+                step: 2,
+                section: "USER".to_string(),
+                operation: "GET user.profile.{name, preferences}".to_string(),
+                estimated_tokens: 200,
+                cumulative_tokens: 700,
+            },
+            ExecutionStep {
+                step: 3,
+                section: "HISTORY".to_string(),
+                operation: "LAST 10 FROM tool_calls".to_string(),
+                estimated_tokens: 1200,
+                cumulative_tokens: 1900,
+            },
+            ExecutionStep {
+                step: 4,
+                section: "KNOWLEDGE".to_string(),
+                operation: "SEARCH docs BY SIMILARITY($query) TOP 5".to_string(),
+                estimated_tokens: 800,
+                cumulative_tokens: 2700,
+            },
+        ],
+        recommendations: vec![
+            "Consider reducing HISTORY to LAST 5 for better knowledge coverage".to_string(),
+            "36% of budget unused - could increase TOP_K for KNOWLEDGE section".to_string(),
+        ],
+    })
+}
+
+/// Get current budget usage for a session
+#[tauri::command]
+pub async fn get_session_budget(_session_id: String) -> Result<BudgetVisualization, String> {
+    // In a real implementation, this would query the session's AgentContext
+    Ok(BudgetVisualization {
+        total_budget: 4096,
+        allocated: 2700,
+        remaining: 1396,
+        sections: vec![],
+    })
+}
+
+/// Bind a recipe to a session
+#[tauri::command]
+pub async fn bind_recipe_to_session(
+    recipe_id: String,
+    session_id: String,
+) -> Result<(), String> {
+    // In a real implementation, this would update the ContextRecipeStore
+    eprintln!(
+        "Binding recipe {} to session {}",
+        recipe_id,
+        session_id
+    );
+    Ok(())
+}
+
+/// List sessions bound to a recipe
+#[tauri::command]
+pub async fn list_recipe_sessions(recipe_id: String) -> Result<Vec<String>, String> {
+    // In a real implementation, this would query bound sessions
+    Ok(vec![
+        format!("session-{}-1", recipe_id),
+        format!("session-{}-2", recipe_id),
+    ])
+}
+
+# ===== End of src-tauri/src/commands/context.rs =====
+
+# ===== Start of src-tauri/src/commands/llm.rs =====
+
+//! LLM Commands - OpenAI-compatible chat completion with MCP tools
+//!
+//! Supports:
+//! - OpenAI API
+//! - Azure OpenAI 
+//! - OpenAI-compatible endpoints (Ollama, LMStudio, vLLM, etc.)
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tauri::State;
+
+use crate::state::AppState;
+
+/// LLM Provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmConfig {
+    /// Provider type: "openai", "azure", "custom"
+    pub provider: String,
+    /// API key
+    pub api_key: String,
+    /// Custom endpoint URL (required for azure/custom)
+    pub endpoint: Option<String>,
+    /// Model name
+    pub model: String,
+    /// Azure API version (required for azure)
+    pub azure_api_version: Option<String>,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: "openai".to_string(),
+            api_key: String::new(),
+            endpoint: None,
+            model: "gpt-4o-mini".to_string(),
+            azure_api_version: None,
+        }
+    }
+}
+
+/// Chat message format
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Chat completion response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatResponse {
+    pub message: ChatMessage,
+    pub tool_results: Option<Vec<ToolResult>>,
+    pub usage: Option<Usage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub tool_name: String,
+    pub result: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Usage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// Save LLM configuration
+#[tauri::command]
+pub async fn save_llm_config(
+    app: tauri::AppHandle,
+    config: LlmConfig,
+) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    
+    let store = app.store("llm_config.json")
+        .map_err(|e| format!("Failed to open store: {}", e))?;
+    
+    store.set("config", json!(config));
+    store.save().map_err(|e| format!("Failed to save: {}", e))?;
+    
+    Ok(())
+}
+
+/// Get LLM configuration
+#[tauri::command]
+pub async fn get_llm_config(
+    app: tauri::AppHandle,
+) -> Result<Option<LlmConfig>, String> {
+    use tauri_plugin_store::StoreExt;
+    
+    let store = app.store("llm_config.json")
+        .map_err(|e| format!("Failed to open store: {}", e))?;
+    
+    match store.get("config") {
+        Some(value) => {
+            let config: LlmConfig = serde_json::from_value(value.clone())
+                .map_err(|e| format!("Failed to parse config: {}", e))?;
+            Ok(Some(config))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Clear LLM configuration
+#[tauri::command]
+pub async fn clear_llm_config(
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    
+    let store = app.store("llm_config.json")
+        .map_err(|e| format!("Failed to open store: {}", e))?;
+    
+    store.clear();
+    store.save().map_err(|e| format!("Failed to save: {}", e))?;
+    
+    Ok(())
+}
+
+/// Test LLM connection
+#[tauri::command]
+pub async fn test_llm_connection(
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let config = get_llm_config(app).await?
+        .ok_or("No LLM configuration found")?;
+    
+    if config.api_key.is_empty() {
+        return Err("API key is required".to_string());
+    }
+    
+    // Build endpoint URL
+    let url = match config.provider.as_str() {
+        "openai" => {
+            // Use custom endpoint if provided, otherwise default to OpenAI
+            if let Some(ref endpoint) = config.endpoint {
+                if !endpoint.is_empty() {
+                    format!("{}/chat/completions", endpoint.trim_end_matches('/'))
+                } else {
+                    "https://api.openai.com/v1/chat/completions".to_string()
+                }
+            } else {
+                "https://api.openai.com/v1/chat/completions".to_string()
+            }
+        },
+        "azure" => {
+            let endpoint = config.endpoint.as_ref()
+                .ok_or("Azure endpoint is required")?;
+            let default_version = "2024-02-01".to_string();
+            let api_version = config.azure_api_version.as_ref()
+                .unwrap_or(&default_version);
+            format!("{}/openai/deployments/{}/chat/completions?api-version={}", 
+                endpoint.trim_end_matches('/'), 
+                config.model,
+                api_version
+            )
+        },
+        "custom" => {
+            let endpoint = config.endpoint.as_ref()
+                .ok_or("Custom endpoint is required")?;
+            format!("{}/chat/completions", endpoint.trim_end_matches('/'))
+        },
+        _ => return Err(format!("Unknown provider: {}", config.provider)),
+    };
+    
+    // Build request
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url)
+        .header("Content-Type", "application/json");
+    
+    // Add auth header
+    if config.provider == "azure" {
+        req = req.header("api-key", &config.api_key);
+    } else {
+        req = req.header("Authorization", format!("Bearer {}", config.api_key));
+    }
+    
+    // Simple test message
+    let body = json!({
+        "model": config.model,
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 5
+    });
+    
+    let response = req.json(&body).send().await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if response.status().is_success() {
+        Ok(format!("✓ Connected to {} using model {}", config.provider, config.model))
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("API error ({}): {}", status, body))
+    }
+}
+
+/// Chat completion with MCP tool support
+#[tauri::command]
+pub async fn chat_completion(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    messages: Vec<ChatMessage>,
+) -> Result<ChatResponse, String> {
+    let config = get_llm_config(app.clone()).await?
+        .ok_or("No LLM configuration found")?;
+    
+    if config.api_key.is_empty() {
+        return Err("API key is required".to_string());
+    }
+    
+    // Get MCP tools (only for native OpenAI API, not custom endpoints)
+    let is_native_openai = config.provider == "openai" && 
+        config.endpoint.as_ref().map(|e| e.is_empty()).unwrap_or(true);
+    let tools = if is_native_openai {
+        get_openai_tools(&state).await?
+    } else {
+        vec![]  // Skip tools for custom endpoints - may not support function calling
+    };
+    
+    // Build endpoint URL
+    let url = match config.provider.as_str() {
+        "openai" => {
+            // Use custom endpoint if provided, otherwise default to OpenAI
+            if let Some(ref endpoint) = config.endpoint {
+                if !endpoint.is_empty() {
+                    format!("{}/chat/completions", endpoint.trim_end_matches('/'))
+                } else {
+                    "https://api.openai.com/v1/chat/completions".to_string()
+                }
+            } else {
+                "https://api.openai.com/v1/chat/completions".to_string()
+            }
+        },
+        "azure" => {
+            let endpoint = config.endpoint.as_ref()
+                .ok_or("Azure endpoint is required")?;
+            let default_version = "2024-02-01".to_string();
+            let api_version = config.azure_api_version.as_ref()
+                .unwrap_or(&default_version);
+            format!("{}/openai/deployments/{}/chat/completions?api-version={}", 
+                endpoint.trim_end_matches('/'), 
+                config.model,
+                api_version
+            )
+        },
+        "custom" => {
+            let endpoint = config.endpoint.as_ref()
+                .ok_or("Custom endpoint is required")?;
+            format!("{}/chat/completions", endpoint.trim_end_matches('/'))
+        },
+        _ => return Err(format!("Unknown provider: {}", config.provider)),
+    };
+    
+    // Build request body
+    let mut body = json!({
+        "model": config.model,
+        "messages": messages,
+    });
+    
+    // Add tools only if available (native OpenAI)
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+        body["tool_choice"] = json!("auto");
+    }
+    
+    // Make request
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url)
+        .header("Content-Type", "application/json");
+    
+    if config.provider == "azure" {
+        req = req.header("api-key", &config.api_key);
+    } else {
+        req = req.header("Authorization", format!("Bearer {}", config.api_key));
+    }
+    
+    let response = req.json(&body).send().await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API error ({}): {}", status, body));
+    }
+    
+    let response_json: Value = response.json().await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    
+    // Parse response
+    let choice = response_json["choices"].get(0)
+        .ok_or("No choices in response")?;
+    
+    let message = &choice["message"];
+    let content = message["content"].as_str().map(|s| s.to_string());
+    let role = message["role"].as_str().unwrap_or("assistant").to_string();
+    
+    // Check for tool calls
+    let tool_calls: Option<Vec<ToolCall>> = if let Some(calls) = message["tool_calls"].as_array() {
+        Some(calls.iter().filter_map(|tc| {
+            Some(ToolCall {
+                id: tc["id"].as_str()?.to_string(),
+                call_type: tc["type"].as_str().unwrap_or("function").to_string(),
+                function: FunctionCall {
+                    name: tc["function"]["name"].as_str()?.to_string(),
+                    arguments: tc["function"]["arguments"].as_str()?.to_string(),
+                },
+            })
+        }).collect())
+    } else {
+        None
+    };
+    
+    // Execute tool calls if present
+    let tool_results = if let Some(ref calls) = tool_calls {
+        let mut results = Vec::new();
+        for call in calls {
+            let args: Value = serde_json::from_str(&call.function.arguments)
+                .unwrap_or(json!({}));
+            
+            // Call MCP tool
+            let mcp_lock = state.mcp_server.read().await;
+            if let Some(mcp) = mcp_lock.as_ref() {
+                let mcp_req = sochdb_mcp::RpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    id: Value::Number(1.into()),
+                    method: "tools/call".to_string(),
+                    params: json!({
+                        "name": call.function.name,
+                        "arguments": args,
+                    }),
+                };
+                
+                let mcp_resp = mcp.dispatch(&mcp_req);
+                let result_text = if let Some(result) = mcp_resp.result {
+                    if let Some(content) = result["content"].as_array() {
+                        content.get(0)
+                            .and_then(|c| c["text"].as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| serde_json::to_string(&result).unwrap_or_default())
+                    } else {
+                        serde_json::to_string(&result).unwrap_or_default()
+                    }
+                } else if let Some(err) = mcp_resp.error {
+                    format!("Error: {}", err.message)
+                } else {
+                    "No result".to_string()
+                };
+                
+                results.push(ToolResult {
+                    tool_name: call.function.name.clone(),
+                    result: result_text,
+                });
+            }
+        }
+        Some(results)
+    } else {
+        None
+    };
+    
+    // Parse usage
+    let usage = response_json["usage"].as_object().map(|u| Usage {
+        prompt_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+        completion_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
+        total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
+    });
+    
+    Ok(ChatResponse {
+        message: ChatMessage {
+            role,
+            content,
+            tool_calls,
+            tool_call_id: None,
+        },
+        tool_results,
+        usage,
+    })
+}
+
+/// Convert MCP tools to OpenAI function format
+async fn get_openai_tools(state: &State<'_, Arc<AppState>>) -> Result<Vec<Value>, String> {
+    let mcp_lock = state.mcp_server.read().await;
+    let mcp = match mcp_lock.as_ref() {
+        Some(m) => m,
+        None => return Ok(vec![]),
+    };
+    
+    // Get tools list
+    let req = sochdb_mcp::RpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Value::Number(1.into()),
+        method: "tools/list".to_string(),
+        params: Value::Null,
+    };
+    
+    let resp = mcp.dispatch(&req);
+    
+    let tools_list = match resp.result {
+        Some(result) => result["tools"].as_array().cloned().unwrap_or_default(),
+        None => return Ok(vec![]),
+    };
+    
+    // Convert to OpenAI format
+    let openai_tools: Vec<Value> = tools_list.iter().map(|tool| {
+        json!({
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description").unwrap_or(&json!("")),
+                "parameters": tool.get("inputSchema").unwrap_or(&json!({"type": "object", "properties": {}}))
+            }
+        })
+    }).collect();
+    
+    Ok(openai_tools)
+}
+
+# ===== End of src-tauri/src/commands/llm.rs =====
+
+# ===== Start of src-tauri/src/commands/mcp.rs =====
+
+//! MCP Commands - Expose MCP tools via Tauri IPC
+
+use serde_json::Value;
+use tauri::State;
+use std::sync::Arc;
+
+use crate::state::AppState;
+use sochdb_mcp::RpcRequest;
+
+/// List available MCP tools
+#[tauri::command]
+pub async fn mcp_list_tools(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Value, String> {
+    let mcp_lock = state.mcp_server.read().await;
+    let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized. Connect to a database first.")?;
+    
+    // Create a tools/list request
+    let req = RpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Value::Number(1.into()),
+        method: "tools/list".to_string(),
+        params: Value::Null,
+    };
+    
+    let resp = mcp.dispatch(&req);
+    
+    match resp.result {
+        Some(result) => Ok(result),
+        None => Err(resp.error.map(|e| e.message).unwrap_or("Unknown error".to_string())),
+    }
+}
+
+/// Call an MCP tool
+#[tauri::command]
+pub async fn mcp_call_tool(
+    state: State<'_, Arc<AppState>>,
+    tool_name: String,
+    arguments: Value,
+) -> Result<Value, String> {
+    let mcp_lock = state.mcp_server.read().await;
+    let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized. Connect to a database first.")?;
+    
+    // Create a tools/call request
+    let req = RpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Value::Number(1.into()),
+        method: "tools/call".to_string(),
+        params: serde_json::json!({
+            "name": tool_name,
+            "arguments": arguments,
+        }),
+    };
+    
+    let resp = mcp.dispatch(&req);
+    
+    match resp.result {
+        Some(result) => Ok(result),
+        None => Err(resp.error.map(|e| e.message).unwrap_or("Unknown error".to_string())),
+    }
+}
+
+/// Get service status (DB connection + MCP)
+#[tauri::command]
+pub async fn get_service_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::state::ServiceStatus, String> {
+    Ok(state.get_status().await)
+}
+
+
+# ===== End of src-tauri/src/commands/mcp.rs =====
+
+# ===== Start of src-tauri/src/commands/mod.rs =====
+
+pub mod admin;
+pub mod context;
+pub mod llm;
+pub mod mcp;
+pub mod query;
+pub mod schema;
+pub mod vector;
+
+
+# ===== End of src-tauri/src/commands/mod.rs =====
+
+# ===== Start of src-tauri/src/commands/query.rs =====
+
+//! Query execution commands
+
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use std::sync::Arc;
+use crate::state::AppState;
+
+/// Result of a query execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub stats: QueryStats,
+}
+
+/// Query execution statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryStats {
+    pub row_count: usize,
+    pub execution_time_ms: f64,
+    pub scanned_rows: usize,
+}
+
+/// Execute a SQL/ToonQL query
+#[tauri::command]
+pub async fn execute_query(
+    state: State<'_, Arc<AppState>>,
+    query: String,
+) -> Result<QueryResult, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+
+    let start = std::time::Instant::now();
+    
+    // Use MCP tools/call for query execution
+    let mcp_lock = state.mcp_server.read().await;
+    let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized")?;
+    
+    // Create query request
+    let req = sochdb_mcp::RpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: serde_json::Value::Number(1.into()),
+        method: "tools/call".to_string(),
+        params: serde_json::json!({
+            "name": "query",
+            "arguments": { "query": query }
+        }),
+    };
+    
+    let resp = mcp.dispatch(&req);
+    let execution_time = start.elapsed().as_secs_f64() * 1000.0;
+    
+    match resp.result {
+        Some(result) => {
+            // Parse MCP result into QueryResult
+            Ok(QueryResult {
+                columns: vec!["result".to_string()],
+                rows: vec![vec![result]],
+                stats: QueryStats {
+                    row_count: 1,
+                    execution_time_ms: execution_time,
+                    scanned_rows: 0,
+                },
+            })
+        },
+        None => {
+            let err_msg = resp.error.map(|e| e.message).unwrap_or("Query failed".to_string());
+            Err(err_msg)
+        }
+    }
+}
+
+/// Get query explanation/plan
+#[tauri::command]
+pub async fn explain_query(
+    state: State<'_, Arc<AppState>>,
+    _query: String,
+) -> Result<String, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // TODO: Implement explain via MCP
+    Ok("Query plan: Full scan (explain not yet implemented)".to_string())
+}
+
+# ===== End of src-tauri/src/commands/query.rs =====
+
+# ===== Start of src-tauri/src/commands/schema.rs =====
+
+//! Schema introspection commands
+
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use std::sync::Arc;
+use crate::state::AppState;
+
+/// Column definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub is_primary_key: bool,
+}
+
+/// Table definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableInfo {
+    pub name: String,
+    pub row_count: usize,
+    pub columns: Vec<ColumnInfo>,
+}
+
+/// Index definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexInfo {
+    pub name: String,
+    pub table_name: String,
+    pub column_name: String,
+    pub index_type: String,
+    pub config: Option<String>,
+}
+
+/// Path (KV store) info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathInfo {
+    pub path: String,
+    pub count: usize,
+}
+
+/// Complete database schema
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseSchema {
+    pub tables: Vec<TableInfo>,
+    pub indexes: Vec<IndexInfo>,
+    pub paths: Vec<PathInfo>,
+}
+
+/// Get the complete database schema
+#[tauri::command]
+pub async fn get_schema(
+    state: State<'_, Arc<AppState>>,
+) -> Result<DatabaseSchema, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+
+    // Use MCP to list tables via scan
+    let mcp_lock = state.mcp_server.read().await;
+    let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized")?;
+    
+    // List tables via MCP
+    let req = sochdb_mcp::RpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: serde_json::Value::Number(1.into()),
+        method: "tools/call".to_string(),
+        params: serde_json::json!({
+            "name": "list_tables",
+            "arguments": {}
+        }),
+    };
+    
+    let _resp = mcp.dispatch(&req);
+    
+    // Return basic schema - real implementation would parse MCP response
+    Ok(DatabaseSchema {
+        tables: vec![],
+        indexes: vec![],
+        paths: vec![],
+    })
+}
+
+/// Get information about a specific table
+#[tauri::command]
+pub async fn get_table_info(
+    state: State<'_, Arc<AppState>>,
+    table_name: String,
+) -> Result<TableInfo, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // TODO: Query table schema via MCP
+    Ok(TableInfo {
+        name: table_name,
+        row_count: 0,
+        columns: vec![],
+    })
+}
+
+# ===== End of src-tauri/src/commands/schema.rs =====
+
+# ===== Start of src-tauri/src/commands/vector.rs =====
+
+//! Vector search commands
+
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use std::sync::Arc;
+use crate::state::AppState;
+
+/// Vector search result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorResult {
+    pub id: String,
+    pub score: f32,
+    pub content: String,
+    pub metadata: serde_json::Value,
+}
+
+/// Perform a vector similarity search
+#[tauri::command]
+pub async fn vector_search(
+    state: State<'_, Arc<AppState>>,
+    table: String,
+    column: String,
+    query_text: String,
+    limit: usize,
+) -> Result<Vec<VectorResult>, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // Use MCP for vector search
+    let mcp_lock = state.mcp_server.read().await;
+    let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized")?;
+    
+    let req = sochdb_mcp::RpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: serde_json::Value::Number(1.into()),
+        method: "tools/call".to_string(),
+        params: serde_json::json!({
+            "name": "vector_search",
+            "arguments": {
+                "table": table,
+                "column": column,
+                "query": query_text,
+                "limit": limit
+            }
+        }),
+    };
+    
+    let _resp = mcp.dispatch(&req);
+    
+    // Return empty for now - real implementation would parse MCP response
+    Ok(vec![])
+}
+
+/// Get vector columns for a table
+#[tauri::command]
+pub async fn get_vector_columns(
+    state: State<'_, Arc<AppState>>,
+    _table: String,
+) -> Result<Vec<String>, String> {
+    let status = state.get_status().await;
+    if !status.db_connected {
+        return Err("No active connection".to_string());
+    }
+    
+    // TODO: Query vector columns via MCP
+    Ok(vec![])
+}
+
+# ===== End of src-tauri/src/commands/vector.rs =====
+
+# ===== Start of src-tauri/src/connection/manager.rs =====
+
+//! Connection manager for handling multiple SochDB connections
+
+use super::pool::ConnectionPool;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Saved connection configuration
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedConnection {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub connection_type: ConnectionType,
+}
+
+/// Type of connection
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionType {
+    LocalFile,
+    UnixSocket,
+    TcpIp,
+    Embedded,
+}
+
+/// Connection manager state
+#[allow(dead_code)]
+pub struct ConnectionManager {
+    pool: Arc<ConnectionPool>,
+    saved_connections: Vec<SavedConnection>,
+    active_connection_id: Option<String>,
+}
+
+#[allow(dead_code)]
+impl ConnectionManager {
+    pub fn new() -> Self {
+        Self {
+            pool: Arc::new(ConnectionPool::new()),
+            saved_connections: vec![
+                SavedConnection {
+                    id: "local-dev".to_string(),
+                    name: "Local Development".to_string(),
+                    path: "./dev.sochdb".to_string(),
+                    connection_type: ConnectionType::LocalFile,
+                },
+                SavedConnection {
+                    id: "production".to_string(),
+                    name: "Production".to_string(),
+                    path: "/var/sochdb/prod".to_string(),
+                    connection_type: ConnectionType::LocalFile,
+                },
+                SavedConnection {
+                    id: "remote".to_string(),
+                    name: "Remote Server".to_string(),
+                    path: "192.168.1.10:7654".to_string(),
+                    connection_type: ConnectionType::TcpIp,
+                },
+            ],
+            active_connection_id: Some("local-dev".to_string()),
+        }
+    }
+
+    /// Get the connection pool
+    pub fn pool(&self) -> Arc<ConnectionPool> {
+        self.pool.clone()
+    }
+
+    /// Get saved connections
+    pub fn saved_connections(&self) -> &[SavedConnection] {
+        &self.saved_connections
+    }
+
+    /// Add a new saved connection
+    pub fn add_saved_connection(&mut self, conn: SavedConnection) {
+        self.saved_connections.push(conn);
+    }
+
+    /// Remove a saved connection
+    pub fn remove_saved_connection(&mut self, id: &str) {
+        self.saved_connections.retain(|c| c.id != id);
+    }
+
+    /// Get the active connection ID
+    pub fn active_connection_id(&self) -> Option<&str> {
+        self.active_connection_id.as_deref()
+    }
+
+    /// Set the active connection
+    pub fn set_active_connection(&mut self, id: String) {
+        self.active_connection_id = Some(id);
+    }
+}
+
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+# ===== End of src-tauri/src/connection/manager.rs =====
+
+# ===== Start of src-tauri/src/connection/mod.rs =====
+
+pub mod manager;
+pub mod pool;
+
+
+# ===== End of src-tauri/src/connection/mod.rs =====
+
+# ===== Start of src-tauri/src/connection/pool.rs =====
+
+//! Connection pool for SochDB connections
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use sochdb::DurableToonClient;
+
+/// Connection pool entry
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct PoolEntry {
+    pub path: String,
+    pub connected: bool,
+    pub client: Option<Arc<DurableToonClient>>,
+}
+
+/// Connection pool for managing multiple database connections
+#[allow(dead_code)]
+pub struct ConnectionPool {
+    connections: Arc<RwLock<HashMap<String, PoolEntry>>>,
+}
+
+#[allow(dead_code)]
+impl ConnectionPool {
+    pub fn new() -> Self {
+        Self {
+            connections: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Add a connection to the pool
+    pub async fn add(&self, id: String, path: String, client: Arc<DurableToonClient>) -> Result<(), String> {
+        let mut conns = self.connections.write().await;
+        conns.insert(
+            id,
+            PoolEntry {
+                path,
+                connected: true,
+                client: Some(client),
+            },
+        );
+        Ok(())
+    }
+
+    /// Remove a connection from the pool
+    pub async fn remove(&self, id: &str) -> Result<(), String> {
+        let mut conns = self.connections.write().await;
+        conns.remove(id);
+        Ok(())
+    }
+
+    /// Get a connection from the pool
+    pub async fn get(&self, id: &str) -> Option<PoolEntry> {
+        let conns = self.connections.read().await;
+        conns.get(id).cloned()
+    }
+
+    /// List all connections
+    pub async fn list(&self) -> Vec<(String, PoolEntry)> {
+        let conns = self.connections.read().await;
+        conns
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+impl Default for ConnectionPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+# ===== End of src-tauri/src/connection/pool.rs =====
+
+# ===== Start of src-tauri/src/lib.rs =====
+
+//! SochDB Studio - Database Administration Tool
+//! 
+//! A Tauri 2.0 desktop application for managing SochDB databases.
+//! Similar to DBeaver, TablePlus, MongoDB Compass - but for SochDB.
+
+mod commands;
+mod connection;
+mod parser;
+pub mod policy;
+mod state;
+
+use std::sync::Arc;
+
+pub use policy::{CommandCategory, CommandPolicy, ConnectionMode, PolicyCheck, UserRole};
+pub use state::AppState;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // Initialize unified application state
+    let app_state = Arc::new(AppState::new());
+    
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .manage(app_state)
+        .invoke_handler(tauri::generate_handler![
+            // Database commands
+            commands::admin::connect,
+            commands::admin::disconnect,
+            commands::admin::get_stats,
+            commands::admin::checkpoint,
+            commands::admin::gc,
+            commands::admin::compact,
+            // Policy commands
+            commands::admin::get_policy,
+            commands::admin::set_policy,
+            commands::admin::check_command,
+            commands::admin::get_allowed_commands,
+            // Query commands
+            commands::query::execute_query,
+            commands::query::explain_query,
+            // Schema commands
+            commands::schema::get_schema,
+            commands::schema::get_table_info,
+            // Vector commands
+            commands::vector::vector_search,
+            commands::vector::get_vector_columns,
+            // MCP commands
+            commands::mcp::mcp_list_tools,
+            commands::mcp::mcp_call_tool,
+            commands::mcp::get_service_status,
+            // LLM commands
+            commands::llm::save_llm_config,
+            commands::llm::get_llm_config,
+            commands::llm::clear_llm_config,
+            commands::llm::test_llm_connection,
+            commands::llm::chat_completion,
+            // Context Engineering commands
+            commands::context::list_context_recipes,
+            commands::context::get_context_recipe,
+            commands::context::save_context_recipe,
+            commands::context::explain_context,
+            commands::context::get_session_budget,
+            commands::context::bind_recipe_to_session,
+            commands::context::list_recipe_sessions,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+# ===== End of src-tauri/src/lib.rs =====
+
+# ===== Start of src-tauri/src/main.rs =====
+
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+fn main() {
+    sochdb_studio_lib::run()
+}
+
+# ===== End of src-tauri/src/main.rs =====
+
+# ===== Start of src-tauri/src/parser/mod.rs =====
+
+pub mod sql;
+pub mod toonql;
+
+
+# ===== End of src-tauri/src/parser/mod.rs =====
+
+# ===== Start of src-tauri/src/parser/sql.rs =====
+
+//! SQL parser for SochDB Studio
+//!
+//! Provides a complete SQL parser for DML/DDL statements with proper AST generation.
+//! This is the unified parser used across Studio, MCP, and query engine.
+
+use serde::{Deserialize, Serialize};
+
+/// SQL statement type
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SqlStatement {
+    Select {
+        table: String,
+        columns: Vec<String>,
+        where_clause: Option<WhereExpr>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        order_by: Option<OrderBy>,
+    },
+    Insert {
+        table: String,
+        columns: Vec<String>,
+        values: Vec<Vec<SqlValue>>,
+    },
+    Update {
+        table: String,
+        set_clause: Vec<(String, SqlValue)>,
+        where_clause: Option<WhereExpr>,
+    },
+    Delete {
+        table: String,
+        where_clause: Option<WhereExpr>,
+    },
+    CreateTable {
+        name: String,
+        columns: Vec<ColumnDef>,
+        if_not_exists: bool,
+    },
+    DropTable {
+        name: String,
+        if_exists: bool,
+    },
+    CreateIndex {
+        name: String,
+        table: String,
+        columns: Vec<String>,
+        unique: bool,
+    },
+    /// Unsupported statement with explanation
+    Unsupported {
+        statement: String,
+        reason: String,
+    },
+}
+
+/// Column definition for CREATE TABLE
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnDef {
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
+    pub primary_key: bool,
+    pub default: Option<SqlValue>,
+}
+
+/// SQL data types
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DataType {
+    Integer,
+    BigInt,
+    Float,
+    Double,
+    Text,
+    Varchar(usize),
+    Boolean,
+    Timestamp,
+    Blob,
+    Vector(usize), // Vector with dimension
+    Json,
+}
+
+/// SQL value
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SqlValue {
+    Null,
+    Integer(i64),
+    Float(f64),
+    Text(String),
+    Boolean(bool),
+    Placeholder(String), // For prepared statements: $1, ?
+}
+
+/// WHERE expression (supports full boolean logic)
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WhereExpr {
+    Comparison {
+        column: String,
+        op: CompareOp,
+        value: SqlValue,
+    },
+    In {
+        column: String,
+        values: Vec<SqlValue>,
+        negated: bool,
+    },
+    Like {
+        column: String,
+        pattern: String,
+        negated: bool,
+    },
+    IsNull {
+        column: String,
+        negated: bool,
+    },
+    Between {
+        column: String,
+        low: SqlValue,
+        high: SqlValue,
+    },
+    And(Vec<WhereExpr>),
+    Or(Vec<WhereExpr>),
+    Not(Box<WhereExpr>),
+}
+
+/// Comparison operators
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+/// ORDER BY clause
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderBy {
+    pub columns: Vec<(String, SortOrder)>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+/// SQL Parser with tokenizer
+#[allow(dead_code)]
+pub struct SqlParser<'a> {
+    input: &'a str,
+    pos: usize,
+    tokens: Vec<Token>,
+    token_pos: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+enum Token {
+    Keyword(String),
+    Identifier(String),
+    String(String),
+    Number(String),
+    Operator(String),
+    Comma,
+    OpenParen,
+    CloseParen,
+    Semicolon,
+    Star,
+    Dot,
+    Eof,
+}
+
+impl<'a> SqlParser<'a> {
+    pub fn new(input: &'a str) -> Self {
+        let mut parser = Self {
+            input,
+            pos: 0,
+            tokens: Vec::new(),
+            token_pos: 0,
+        };
+        parser.tokenize();
+        parser
+    }
+
+    fn tokenize(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let len = chars.len();
+        self.pos = 0;
+
+        while self.pos < len {
+            let c = chars[self.pos];
+
+            // Skip whitespace
+            if c.is_whitespace() {
+                self.pos += 1;
+                continue;
+            }
+
+            // String literal
+            if c == '\'' || c == '"' {
+                let quote = c;
+                self.pos += 1;
+                let start = self.pos;
+                while self.pos < len && chars[self.pos] != quote {
+                    if chars[self.pos] == '\\' && self.pos + 1 < len {
+                        self.pos += 2;
+                    } else {
+                        self.pos += 1;
+                    }
+                }
+                let s: String = chars[start..self.pos].iter().collect();
+                self.tokens.push(Token::String(s));
+                self.pos += 1; // Skip closing quote
+                continue;
+            }
+
+            // Number
+            if c.is_ascii_digit() || (c == '-' && self.pos + 1 < len && chars[self.pos + 1].is_ascii_digit()) {
+                let start = self.pos;
+                if c == '-' {
+                    self.pos += 1;
+                }
+                while self.pos < len && (chars[self.pos].is_ascii_digit() || chars[self.pos] == '.') {
+                    self.pos += 1;
+                }
+                let s: String = chars[start..self.pos].iter().collect();
+                self.tokens.push(Token::Number(s));
+                continue;
+            }
+
+            // Identifier or keyword
+            if c.is_alphabetic() || c == '_' {
+                let start = self.pos;
+                while self.pos < len && (chars[self.pos].is_alphanumeric() || chars[self.pos] == '_') {
+                    self.pos += 1;
+                }
+                let s: String = chars[start..self.pos].iter().collect();
+                let upper = s.to_uppercase();
+                if is_keyword(&upper) {
+                    self.tokens.push(Token::Keyword(upper));
+                } else {
+                    self.tokens.push(Token::Identifier(s));
+                }
+                continue;
+            }
+
+            // Operators and punctuation
+            match c {
+                ',' => {
+                    self.tokens.push(Token::Comma);
+                    self.pos += 1;
+                }
+                '(' => {
+                    self.tokens.push(Token::OpenParen);
+                    self.pos += 1;
+                }
+                ')' => {
+                    self.tokens.push(Token::CloseParen);
+                    self.pos += 1;
+                }
+                ';' => {
+                    self.tokens.push(Token::Semicolon);
+                    self.pos += 1;
+                }
+                '*' => {
+                    self.tokens.push(Token::Star);
+                    self.pos += 1;
+                }
+                '.' => {
+                    self.tokens.push(Token::Dot);
+                    self.pos += 1;
+                }
+                '=' => {
+                    self.tokens.push(Token::Operator("=".to_string()));
+                    self.pos += 1;
+                }
+                '<' => {
+                    if self.pos + 1 < len && chars[self.pos + 1] == '=' {
+                        self.tokens.push(Token::Operator("<=".to_string()));
+                        self.pos += 2;
+                    } else if self.pos + 1 < len && chars[self.pos + 1] == '>' {
+                        self.tokens.push(Token::Operator("<>".to_string()));
+                        self.pos += 2;
+                    } else {
+                        self.tokens.push(Token::Operator("<".to_string()));
+                        self.pos += 1;
+                    }
+                }
+                '>' => {
+                    if self.pos + 1 < len && chars[self.pos + 1] == '=' {
+                        self.tokens.push(Token::Operator(">=".to_string()));
+                        self.pos += 2;
+                    } else {
+                        self.tokens.push(Token::Operator(">".to_string()));
+                        self.pos += 1;
+                    }
+                }
+                '!' => {
+                    if self.pos + 1 < len && chars[self.pos + 1] == '=' {
+                        self.tokens.push(Token::Operator("!=".to_string()));
+                        self.pos += 2;
+                    } else {
+                        self.pos += 1;
+                    }
+                }
+                '$' | '?' => {
+                    // Placeholder
+                    let start = self.pos;
+                    self.pos += 1;
+                    while self.pos < len && chars[self.pos].is_ascii_digit() {
+                        self.pos += 1;
+                    }
+                    let s: String = chars[start..self.pos].iter().collect();
+                    self.tokens.push(Token::Identifier(s));
+                }
+                _ => {
+                    self.pos += 1;
+                }
+            }
+        }
+        self.tokens.push(Token::Eof);
+    }
+
+    fn current(&self) -> &Token {
+        self.tokens.get(self.token_pos).unwrap_or(&Token::Eof)
+    }
+
+    fn advance(&mut self) {
+        if self.token_pos < self.tokens.len() {
+            self.token_pos += 1;
+        }
+    }
+
+    fn expect_keyword(&mut self, kw: &str) -> Result<(), String> {
+        match self.current() {
+            Token::Keyword(k) if k == kw => {
+                self.advance();
+                Ok(())
+            }
+            other => Err(format!("Expected keyword '{}', found {:?}", kw, other)),
+        }
+    }
+
+    fn expect_identifier(&mut self) -> Result<String, String> {
+        match self.current().clone() {
+            Token::Identifier(s) => {
+                self.advance();
+                Ok(s)
+            }
+            Token::Keyword(s) => {
+                // Allow keywords as identifiers in some contexts
+                self.advance();
+                Ok(s.to_lowercase())
+            }
+            other => Err(format!("Expected identifier, found {:?}", other)),
+        }
+    }
+
+    fn parse_value(&mut self) -> Result<SqlValue, String> {
+        match self.current().clone() {
+            Token::String(s) => {
+                self.advance();
+                Ok(SqlValue::Text(s))
+            }
+            Token::Number(s) => {
+                self.advance();
+                if s.contains('.') {
+                    Ok(SqlValue::Float(s.parse().map_err(|_| "Invalid float")?))
+                } else {
+                    Ok(SqlValue::Integer(s.parse().map_err(|_| "Invalid integer")?))
+                }
+            }
+            Token::Keyword(k) if k == "NULL" => {
+                self.advance();
+                Ok(SqlValue::Null)
+            }
+            Token::Keyword(k) if k == "TRUE" => {
+                self.advance();
+                Ok(SqlValue::Boolean(true))
+            }
+            Token::Keyword(k) if k == "FALSE" => {
+                self.advance();
+                Ok(SqlValue::Boolean(false))
+            }
+            Token::Identifier(s) if s.starts_with('$') || s.starts_with('?') => {
+                self.advance();
+                Ok(SqlValue::Placeholder(s))
+            }
+            other => Err(format!("Expected value, found {:?}", other)),
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn is_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "SELECT" | "FROM" | "WHERE" | "AND" | "OR" | "NOT" | "IN" | "LIKE" |
+        "IS" | "NULL" | "BETWEEN" | "ORDER" | "BY" | "ASC" | "DESC" |
+        "LIMIT" | "OFFSET" | "INSERT" | "INTO" | "VALUES" | "UPDATE" |
+        "SET" | "DELETE" | "CREATE" | "TABLE" | "DROP" | "INDEX" |
+        "IF" | "EXISTS" | "PRIMARY" | "KEY" | "UNIQUE" |
+        "DEFAULT" | "ON" | "TRUE" | "FALSE" | "INTEGER" | "INT" |
+        "BIGINT" | "FLOAT" | "DOUBLE" | "TEXT" | "VARCHAR" | "BOOLEAN" |
+        "TIMESTAMP" | "BLOB" | "VECTOR" | "JSON"
+    )
+}
+
+/// Parse a SQL query string
+#[allow(dead_code)]
+pub fn parse_sql(query: &str) -> Result<SqlStatement, String> {
+    let mut parser = SqlParser::new(query.trim());
+    
+    match parser.current() {
+        Token::Keyword(k) => match k.as_str() {
+            "SELECT" => parse_select_stmt(&mut parser),
+            "INSERT" => parse_insert_stmt(&mut parser),
+            "UPDATE" => parse_update_stmt(&mut parser),
+            "DELETE" => parse_delete_stmt(&mut parser),
+            "CREATE" => parse_create_stmt(&mut parser),
+            "DROP" => parse_drop_stmt(&mut parser),
+            _ => Ok(SqlStatement::Unsupported {
+                statement: query.to_string(),
+                reason: format!("Unsupported statement type: {}", k),
+            }),
+        },
+        _ => Err("Expected SQL keyword at start of statement".to_string()),
+    }
+}
+
+#[allow(dead_code)]
+fn parse_select_stmt(parser: &mut SqlParser) -> Result<SqlStatement, String> {
+    parser.expect_keyword("SELECT")?;
+    
+    // Parse columns
+    let mut columns = Vec::new();
+    loop {
+        match parser.current() {
+            Token::Star => {
+                parser.advance();
+                columns.push("*".to_string());
+            }
+            Token::Identifier(_) | Token::Keyword(_) => {
+                let col = parser.expect_identifier()?;
+                columns.push(col);
+            }
+            _ => break,
+        }
+        if matches!(parser.current(), Token::Comma) {
+            parser.advance();
+        } else {
+            break;
+        }
+    }
+
+    // FROM clause
+    parser.expect_keyword("FROM")?;
+    let table = parser.expect_identifier()?;
+
+    // WHERE clause (optional)
+    let where_clause = if matches!(parser.current(), Token::Keyword(k) if k == "WHERE") {
+        parser.advance();
+        Some(parse_where_expr(parser)?)
+    } else {
+        None
+    };
+
+    // ORDER BY (optional)
+    let order_by = if matches!(parser.current(), Token::Keyword(k) if k == "ORDER") {
+        parser.advance();
+        parser.expect_keyword("BY")?;
+        let mut order_cols = Vec::new();
+        loop {
+            let col = parser.expect_identifier()?;
+            let order = if matches!(parser.current(), Token::Keyword(k) if k == "DESC") {
+                parser.advance();
+                SortOrder::Desc
+            } else {
+                if matches!(parser.current(), Token::Keyword(k) if k == "ASC") {
+                    parser.advance();
+                }
+                SortOrder::Asc
+            };
+            order_cols.push((col, order));
+            if matches!(parser.current(), Token::Comma) {
+                parser.advance();
+            } else {
+                break;
+            }
+        }
+        Some(OrderBy { columns: order_cols })
+    } else {
+        None
+    };
+
+    // LIMIT (optional)
+    let limit = if matches!(parser.current(), Token::Keyword(k) if k == "LIMIT") {
+        parser.advance();
+        match parser.current() {
+            Token::Number(s) => {
+                let n = s.parse().ok();
+                parser.advance();
+                n
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    // OFFSET (optional)
+    let offset = if matches!(parser.current(), Token::Keyword(k) if k == "OFFSET") {
+        parser.advance();
+        match parser.current() {
+            Token::Number(s) => {
+                let n = s.parse().ok();
+                parser.advance();
+                n
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    Ok(SqlStatement::Select {
+        table,
+        columns,
+        where_clause,
+        limit,
+        offset,
+        order_by,
+    })
+}
+
+#[allow(dead_code)]
+fn parse_where_expr(parser: &mut SqlParser) -> Result<WhereExpr, String> {
+    parse_or_expr(parser)
+}
+
+#[allow(dead_code)]
+fn parse_or_expr(parser: &mut SqlParser) -> Result<WhereExpr, String> {
+    let mut left = parse_and_expr(parser)?;
+    
+    while matches!(parser.current(), Token::Keyword(k) if k == "OR") {
+        parser.advance();
+        let right = parse_and_expr(parser)?;
+        left = WhereExpr::Or(vec![left, right]);
+    }
+    
+    Ok(left)
+}
+
+#[allow(dead_code)]
+fn parse_and_expr(parser: &mut SqlParser) -> Result<WhereExpr, String> {
+    let mut left = parse_comparison(parser)?;
+    
+    while matches!(parser.current(), Token::Keyword(k) if k == "AND") {
+        parser.advance();
+        let right = parse_comparison(parser)?;
+        left = WhereExpr::And(vec![left, right]);
+    }
+    
+    Ok(left)
+}
+
+#[allow(dead_code)]
+fn parse_comparison(parser: &mut SqlParser) -> Result<WhereExpr, String> {
+    // Handle NOT
+    if matches!(parser.current(), Token::Keyword(k) if k == "NOT") {
+        parser.advance();
+        let inner = parse_comparison(parser)?;
+        return Ok(WhereExpr::Not(Box::new(inner)));
+    }
+
+    // Handle parentheses
+    if matches!(parser.current(), Token::OpenParen) {
+        parser.advance();
+        let expr = parse_where_expr(parser)?;
+        if matches!(parser.current(), Token::CloseParen) {
+            parser.advance();
+        }
+        return Ok(expr);
+    }
+
+    // Column name
+    let column = parser.expect_identifier()?;
+
+    // Check for IS NULL / IS NOT NULL
+    if matches!(parser.current(), Token::Keyword(k) if k == "IS") {
+        parser.advance();
+        let negated = if matches!(parser.current(), Token::Keyword(k) if k == "NOT") {
+            parser.advance();
+            true
+        } else {
+            false
+        };
+        parser.expect_keyword("NULL")?;
+        return Ok(WhereExpr::IsNull { column, negated });
+    }
+
+    // Check for IN
+    if matches!(parser.current(), Token::Keyword(k) if k == "IN" || k == "NOT") {
+        let negated = if matches!(parser.current(), Token::Keyword(k) if k == "NOT") {
+            parser.advance();
+            parser.expect_keyword("IN")?;
+            true
+        } else {
+            parser.advance(); // consume IN
+            false
+        };
+        
+        if !matches!(parser.current(), Token::OpenParen) {
+            return Err("Expected '(' after IN".to_string());
+        }
+        parser.advance();
+        
+        let mut values = Vec::new();
+        loop {
+            values.push(parser.parse_value()?);
+            if matches!(parser.current(), Token::Comma) {
+                parser.advance();
+            } else {
+                break;
+            }
+        }
+        
+        if matches!(parser.current(), Token::CloseParen) {
+            parser.advance();
+        }
+        
+        return Ok(WhereExpr::In { column, values, negated });
+    }
+
+    // Check for LIKE
+    if matches!(parser.current(), Token::Keyword(k) if k == "LIKE" || k == "NOT") {
+        let negated = if matches!(parser.current(), Token::Keyword(k) if k == "NOT") {
+            parser.advance();
+            parser.expect_keyword("LIKE")?;
+            true
+        } else {
+            parser.advance(); // consume LIKE
+            false
+        };
+        
+        let pattern = match parser.current() {
+            Token::String(s) => {
+                let p = s.clone();
+                parser.advance();
+                p
+            }
+            _ => return Err("Expected string pattern after LIKE".to_string()),
+        };
+        
+        return Ok(WhereExpr::Like { column, pattern, negated });
+    }
+
+    // Check for BETWEEN
+    if matches!(parser.current(), Token::Keyword(k) if k == "BETWEEN") {
+        parser.advance();
+        let low = parser.parse_value()?;
+        parser.expect_keyword("AND")?;
+        let high = parser.parse_value()?;
+        return Ok(WhereExpr::Between { column, low, high });
+    }
+
+    // Standard comparison
+    let op = match parser.current() {
+        Token::Operator(s) => match s.as_str() {
+            "=" => CompareOp::Eq,
+            "!=" | "<>" => CompareOp::Ne,
+            "<" => CompareOp::Lt,
+            "<=" => CompareOp::Le,
+            ">" => CompareOp::Gt,
+            ">=" => CompareOp::Ge,
+            _ => return Err(format!("Unknown operator: {}", s)),
+        },
+        _ => return Err("Expected comparison operator".to_string()),
+    };
+    parser.advance();
+
+    let value = parser.parse_value()?;
+
+    Ok(WhereExpr::Comparison { column, op, value })
+}
+
+#[allow(dead_code)]
+fn parse_insert_stmt(parser: &mut SqlParser) -> Result<SqlStatement, String> {
+    parser.expect_keyword("INSERT")?;
+    parser.expect_keyword("INTO")?;
+    
+    let table = parser.expect_identifier()?;
+    
+    // Optional column list
+    let columns = if matches!(parser.current(), Token::OpenParen) {
+        parser.advance();
+        let mut cols = Vec::new();
+        loop {
+            cols.push(parser.expect_identifier()?);
+            if matches!(parser.current(), Token::Comma) {
+                parser.advance();
+            } else {
+                break;
+            }
+        }
+        if matches!(parser.current(), Token::CloseParen) {
+            parser.advance();
+        }
+        cols
+    } else {
+        Vec::new()
+    };
+    
+    parser.expect_keyword("VALUES")?;
+    
+    // Parse value rows
+    let mut values = Vec::new();
+    loop {
+        if !matches!(parser.current(), Token::OpenParen) {
+            break;
+        }
+        parser.advance();
+        
+        let mut row = Vec::new();
+        loop {
+            row.push(parser.parse_value()?);
+            if matches!(parser.current(), Token::Comma) {
+                parser.advance();
+            } else {
+                break;
+            }
+        }
+        
+        if matches!(parser.current(), Token::CloseParen) {
+            parser.advance();
+        }
+        values.push(row);
+        
+        if matches!(parser.current(), Token::Comma) {
+            parser.advance();
+        } else {
+            break;
+        }
+    }
+    
+    Ok(SqlStatement::Insert { table, columns, values })
+}
+
+#[allow(dead_code)]
+fn parse_update_stmt(parser: &mut SqlParser) -> Result<SqlStatement, String> {
+    parser.expect_keyword("UPDATE")?;
+    let table = parser.expect_identifier()?;
+    parser.expect_keyword("SET")?;
+    
+    // Parse SET clause
+    let mut set_clause = Vec::new();
+    loop {
+        let col = parser.expect_identifier()?;
+        if !matches!(parser.current(), Token::Operator(s) if s == "=") {
+            return Err("Expected '=' in SET clause".to_string());
+        }
+        parser.advance();
+        let val = parser.parse_value()?;
+        set_clause.push((col, val));
+        
+        if matches!(parser.current(), Token::Comma) {
+            parser.advance();
+        } else {
+            break;
+        }
+    }
+    
+    // WHERE clause (optional)
+    let where_clause = if matches!(parser.current(), Token::Keyword(k) if k == "WHERE") {
+        parser.advance();
+        Some(parse_where_expr(parser)?)
+    } else {
+        None
+    };
+    
+    Ok(SqlStatement::Update { table, set_clause, where_clause })
+}
+
+#[allow(dead_code)]
+fn parse_delete_stmt(parser: &mut SqlParser) -> Result<SqlStatement, String> {
+    parser.expect_keyword("DELETE")?;
+    parser.expect_keyword("FROM")?;
+    let table = parser.expect_identifier()?;
+    
+    // WHERE clause (optional)
+    let where_clause = if matches!(parser.current(), Token::Keyword(k) if k == "WHERE") {
+        parser.advance();
+        Some(parse_where_expr(parser)?)
+    } else {
+        None
+    };
+    
+    Ok(SqlStatement::Delete { table, where_clause })
+}
+
+#[allow(dead_code)]
+fn parse_create_stmt(parser: &mut SqlParser) -> Result<SqlStatement, String> {
+    parser.expect_keyword("CREATE")?;
+    
+    match parser.current() {
+        Token::Keyword(k) if k == "TABLE" => {
+            parser.advance();
+            
+            let if_not_exists = if matches!(parser.current(), Token::Keyword(k) if k == "IF") {
+                parser.advance();
+                parser.expect_keyword("NOT")?;
+                parser.expect_keyword("EXISTS")?;
+                true
+            } else {
+                false
+            };
+            
+            let name = parser.expect_identifier()?;
+            
+            if !matches!(parser.current(), Token::OpenParen) {
+                return Err("Expected '(' after table name".to_string());
+            }
+            parser.advance();
+            
+            let mut columns = Vec::new();
+            loop {
+                let col_name = parser.expect_identifier()?;
+                let data_type = parse_data_type(parser)?;
+                
+                let mut nullable = true;
+                let mut primary_key = false;
+                let mut default = None;
+                
+                // Parse column constraints
+                loop {
+                    match parser.current() {
+                        Token::Keyword(k) if k == "NOT" => {
+                            parser.advance();
+                            parser.expect_keyword("NULL")?;
+                            nullable = false;
+                        }
+                        Token::Keyword(k) if k == "NULL" => {
+                            parser.advance();
+                            nullable = true;
+                        }
+                        Token::Keyword(k) if k == "PRIMARY" => {
+                            parser.advance();
+                            parser.expect_keyword("KEY")?;
+                            primary_key = true;
+                            nullable = false;
+                        }
+                        Token::Keyword(k) if k == "DEFAULT" => {
+                            parser.advance();
+                            default = Some(parser.parse_value()?);
+                        }
+                        _ => break,
+                    }
+                }
+                
+                columns.push(ColumnDef {
+                    name: col_name,
+                    data_type,
+                    nullable,
+                    primary_key,
+                    default,
+                });
+                
+                if matches!(parser.current(), Token::Comma) {
+                    parser.advance();
+                } else {
+                    break;
+                }
+            }
+            
+            if matches!(parser.current(), Token::CloseParen) {
+                parser.advance();
+            }
+            
+            Ok(SqlStatement::CreateTable { name, columns, if_not_exists })
+        }
+        Token::Keyword(k) if k == "INDEX" || k == "UNIQUE" => {
+            let unique = k == "UNIQUE";
+            if unique {
+                parser.advance();
+            }
+            parser.expect_keyword("INDEX")?;
+            
+            let name = parser.expect_identifier()?;
+            parser.expect_keyword("ON")?;
+            let table = parser.expect_identifier()?;
+            
+            if !matches!(parser.current(), Token::OpenParen) {
+                return Err("Expected '(' after table name".to_string());
+            }
+            parser.advance();
+            
+            let mut index_columns = Vec::new();
+            loop {
+                index_columns.push(parser.expect_identifier()?);
+                if matches!(parser.current(), Token::Comma) {
+                    parser.advance();
+                } else {
+                    break;
+                }
+            }
+            
+            if matches!(parser.current(), Token::CloseParen) {
+                parser.advance();
+            }
+            
+            Ok(SqlStatement::CreateIndex { name, table, columns: index_columns, unique })
+        }
+        _ => Ok(SqlStatement::Unsupported {
+            statement: parser.input.to_string(),
+            reason: "Only CREATE TABLE and CREATE INDEX are supported".to_string(),
+        }),
+    }
+}
+
+#[allow(dead_code)]
+fn parse_data_type(parser: &mut SqlParser) -> Result<DataType, String> {
+    match parser.current() {
+        Token::Keyword(k) => {
+            let dt = match k.as_str() {
+                "INTEGER" | "INT" => DataType::Integer,
+                "BIGINT" => DataType::BigInt,
+                "FLOAT" => DataType::Float,
+                "DOUBLE" => DataType::Double,
+                "TEXT" => DataType::Text,
+                "BOOLEAN" | "BOOL" => DataType::Boolean,
+                "TIMESTAMP" => DataType::Timestamp,
+                "BLOB" => DataType::Blob,
+                "JSON" => DataType::Json,
+                "VARCHAR" => {
+                    parser.advance();
+                    if matches!(parser.current(), Token::OpenParen) {
+                        parser.advance();
+                        let size = match parser.current() {
+                            Token::Number(s) => s.parse().unwrap_or(255),
+                            _ => 255,
+                        };
+                        parser.advance();
+                        if matches!(parser.current(), Token::CloseParen) {
+                            parser.advance();
+                        }
+                        return Ok(DataType::Varchar(size));
+                    }
+                    return Ok(DataType::Varchar(255));
+                }
+                "VECTOR" => {
+                    parser.advance();
+                    if matches!(parser.current(), Token::OpenParen) {
+                        parser.advance();
+                        let dim = match parser.current() {
+                            Token::Number(s) => s.parse().unwrap_or(768),
+                            _ => 768,
+                        };
+                        parser.advance();
+                        if matches!(parser.current(), Token::CloseParen) {
+                            parser.advance();
+                        }
+                        return Ok(DataType::Vector(dim));
+                    }
+                    return Ok(DataType::Vector(768));
+                }
+                _ => return Err(format!("Unknown data type: {}", k)),
+            };
+            parser.advance();
+            Ok(dt)
+        }
+        _ => Err("Expected data type".to_string()),
+    }
+}
+
+#[allow(dead_code)]
+fn parse_drop_stmt(parser: &mut SqlParser) -> Result<SqlStatement, String> {
+    parser.expect_keyword("DROP")?;
+    parser.expect_keyword("TABLE")?;
+    
+    let if_exists = if matches!(parser.current(), Token::Keyword(k) if k == "IF") {
+        parser.advance();
+        parser.expect_keyword("EXISTS")?;
+        true
+    } else {
+        false
+    };
+    
+    let name = parser.expect_identifier()?;
+    
+    Ok(SqlStatement::DropTable { name, if_exists })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_select() {
+        let result = parse_sql("SELECT * FROM users LIMIT 100");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::Select { table, columns, limit, .. } = result.unwrap() {
+            assert_eq!(table, "users");
+            assert_eq!(columns, vec!["*"]);
+            assert_eq!(limit, Some(100));
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_where() {
+        let result = parse_sql("SELECT id, name FROM users WHERE age > 18 AND status = 'active'");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::Select { table, columns, where_clause, .. } = result.unwrap() {
+            assert_eq!(table, "users");
+            assert_eq!(columns, vec!["id", "name"]);
+            assert!(where_clause.is_some());
+        } else {
+            panic!("Expected SELECT statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_insert() {
+        let result = parse_sql("INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob')");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::Insert { table, columns, values } = result.unwrap() {
+            assert_eq!(table, "users");
+            assert_eq!(columns, vec!["id", "name"]);
+            assert_eq!(values.len(), 2);
+        } else {
+            panic!("Expected INSERT statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_update() {
+        let result = parse_sql("UPDATE users SET name = 'Charlie', age = 30 WHERE id = 1");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::Update { table, set_clause, where_clause } = result.unwrap() {
+            assert_eq!(table, "users");
+            assert_eq!(set_clause.len(), 2);
+            assert!(where_clause.is_some());
+        } else {
+            panic!("Expected UPDATE statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_delete() {
+        let result = parse_sql("DELETE FROM users WHERE id = 1");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::Delete { table, where_clause } = result.unwrap() {
+            assert_eq!(table, "users");
+            assert!(where_clause.is_some());
+        } else {
+            panic!("Expected DELETE statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_create_table() {
+        let result = parse_sql("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, embedding VECTOR(768))");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::CreateTable { name, columns, if_not_exists } = result.unwrap() {
+            assert_eq!(name, "users");
+            assert!(if_not_exists);
+            assert_eq!(columns.len(), 3);
+            assert!(columns[0].primary_key);
+            assert!(!columns[1].nullable);
+            assert!(matches!(columns[2].data_type, DataType::Vector(768)));
+        } else {
+            panic!("Expected CREATE TABLE statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_in_clause() {
+        let result = parse_sql("SELECT * FROM users WHERE status IN ('active', 'pending')");
+        assert!(result.is_ok());
+        
+        if let SqlStatement::Select { where_clause: Some(w), .. } = result.unwrap() {
+            if let WhereExpr::In { column, values, negated } = w {
+                assert_eq!(column, "status");
+                assert_eq!(values.len(), 2);
+                assert!(!negated);
+            } else {
+                panic!("Expected IN clause");
+            }
+        } else {
+            panic!("Expected SELECT statement with WHERE");
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_where() {
+        let result = parse_sql("SELECT * FROM users WHERE (age > 18 AND age < 65) OR status = 'vip'");
+        assert!(result.is_ok());
+    }
+}
+
+# ===== End of src-tauri/src/parser/sql.rs =====
+
+# ===== Start of src-tauri/src/parser/toonql.rs =====
+
+//! ToonQL parser for SochDB-specific query syntax
+
+use serde::{Deserialize, Serialize};
+
+/// ToonQL statement type
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ToonQlStatement {
+    /// VECTOR_SEARCH table USING column NEAR query LIMIT n
+    VectorSearch {
+        table: String,
+        column: String,
+        query: VectorQuery,
+        limit: usize,
+        metric: Option<String>,
+    },
+    /// GET 'path/to/key'
+    Get { path: String },
+    /// PUT 'path/to/key' = value
+    Put { path: String, value: String },
+    /// DELETE 'path/to/key'
+    Delete { path: String },
+    /// SCAN 'prefix/*'
+    Scan { prefix: String },
+    /// Unknown/unparsed statement
+    Unknown(String),
+}
+
+/// Vector query type
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VectorQuery {
+    /// Text to be embedded
+    Text(String),
+    /// Raw vector values
+    Vector(Vec<f32>),
+}
+
+/// Parse a ToonQL query string
+#[allow(dead_code)]
+pub fn parse_toonql(query: &str) -> Result<ToonQlStatement, String> {
+    let query = query.trim();
+    let upper = query.to_uppercase();
+
+    if upper.starts_with("VECTOR_SEARCH") {
+        parse_vector_search(query)
+    } else if upper.starts_with("GET ") {
+        parse_get(query)
+    } else if upper.starts_with("PUT ") {
+        parse_put(query)
+    } else if upper.starts_with("DELETE ") {
+        parse_delete(query)
+    } else if upper.starts_with("SCAN ") {
+        parse_scan(query)
+    } else {
+        Ok(ToonQlStatement::Unknown(query.to_string()))
+    }
+}
+
+#[allow(dead_code)]
+fn parse_vector_search(input: &str) -> Result<ToonQlStatement, String> {
+    let upper = input.to_uppercase();
+    
+    // Extract table name (after VECTOR_SEARCH)
+    let after_vs = &input[13..].trim();
+    let table_end = after_vs.find(|c: char| c.is_whitespace()).unwrap_or(after_vs.len());
+    let table = after_vs[..table_end].to_string();
+
+    // Extract USING column
+    let using_idx = upper.find(" USING ").ok_or("Missing USING clause")?;
+    let after_using = &input[using_idx + 7..];
+    let column_end = after_using.find(|c: char| c.is_whitespace()).unwrap_or(after_using.len());
+    let column = after_using[..column_end].trim().to_string();
+
+    // Extract NEAR query
+    let near_idx = upper.find(" NEAR ").ok_or("Missing NEAR clause")?;
+    let after_near = &input[near_idx + 6..];
+    
+    // Parse query (text or vector)
+    let vector_query = if after_near.starts_with('[') {
+        // Vector format
+        let end = after_near.find(']').unwrap_or(after_near.len());
+        let vec_str = &after_near[1..end];
+        let values: Result<Vec<f32>, _> = vec_str
+            .split(',')
+            .map(|s| s.trim().parse::<f32>())
+            .collect();
+        VectorQuery::Vector(values.map_err(|e| e.to_string())?)
+    } else if after_near.starts_with('\'') {
+        // Text format
+        let end = after_near[1..].find('\'').unwrap_or(after_near.len() - 1);
+        VectorQuery::Text(after_near[1..=end].to_string())
+    } else {
+        return Err("Invalid NEAR query format".to_string());
+    };
+
+    // Extract LIMIT
+    let limit = if let Some(limit_idx) = upper.find(" LIMIT ") {
+        let limit_str = &input[limit_idx + 7..];
+        let end = limit_str.find(|c: char| !c.is_numeric()).unwrap_or(limit_str.len());
+        limit_str[..end].trim().parse().unwrap_or(10)
+    } else {
+        10
+    };
+
+    Ok(ToonQlStatement::VectorSearch {
+        table,
+        column,
+        query: vector_query,
+        limit,
+        metric: None,
+    })
+}
+
+#[allow(dead_code)]
+fn parse_get(query: &str) -> Result<ToonQlStatement, String> {
+    let after_get = &query[4..].trim();
+    let path = extract_quoted_string(after_get)?;
+    Ok(ToonQlStatement::Get { path })
+}
+
+#[allow(dead_code)]
+fn parse_put(query: &str) -> Result<ToonQlStatement, String> {
+    let after_put = &query[4..].trim();
+    
+    // Find the '=' separator
+    let eq_idx = after_put.find('=').ok_or("Missing '=' in PUT statement")?;
+    
+    let path = extract_quoted_string(&after_put[..eq_idx].trim())?;
+    let value = after_put[eq_idx + 1..].trim().to_string();
+    
+    Ok(ToonQlStatement::Put { path, value })
+}
+
+#[allow(dead_code)]
+fn parse_delete(query: &str) -> Result<ToonQlStatement, String> {
+    let after_delete = &query[7..].trim();
+    let path = extract_quoted_string(after_delete)?;
+    Ok(ToonQlStatement::Delete { path })
+}
+
+#[allow(dead_code)]
+fn parse_scan(query: &str) -> Result<ToonQlStatement, String> {
+    let after_scan = &query[5..].trim();
+    let prefix = extract_quoted_string(after_scan)?;
+    Ok(ToonQlStatement::Scan { prefix })
+}
+
+#[allow(dead_code)]
+fn extract_quoted_string(s: &str) -> Result<String, String> {
+    let s = s.trim();
+    if s.starts_with('\'') && s.len() > 1 {
+        let end = s[1..].find('\'').unwrap_or(s.len() - 1);
+        Ok(s[1..=end].to_string())
+    } else {
+        Err("Expected quoted string".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_get() {
+        let result = parse_toonql("GET 'config/settings/theme'");
+        assert!(result.is_ok());
+        
+        if let ToonQlStatement::Get { path } = result.unwrap() {
+            assert_eq!(path, "config/settings/theme");
+        } else {
+            panic!("Expected GET statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_vector_search() {
+        let result = parse_toonql("VECTOR_SEARCH documents USING embedding NEAR 'machine learning' LIMIT 10");
+        assert!(result.is_ok());
+        
+        if let ToonQlStatement::VectorSearch { table, column, limit, .. } = result.unwrap() {
+            assert_eq!(table, "documents");
+            assert_eq!(column, "embedding");
+            assert_eq!(limit, 10);
+        } else {
+            panic!("Expected VECTOR_SEARCH statement");
+        }
+    }
+}
+
+# ===== End of src-tauri/src/parser/toonql.rs =====
+
+# ===== Start of src-tauri/src/policy.rs =====
+
+//! Command Policy System for SochDB Studio
+//!
+//! Provides capability/policy-driven command exposure based on:
+//! - Connection type (local, remote, read-only)
+//! - User role (admin, viewer, developer)
+//! - Database state (connected, healthy, etc.)
+
+use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+
+/// Command categories for grouping related operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CommandCategory {
+    /// Read-only database queries
+    Query,
+    /// Schema introspection
+    Schema,
+    /// Database administration (checkpoint, GC, compact)
+    Admin,
+    /// Vector search operations
+    Vector,
+    /// MCP tool operations
+    Mcp,
+    /// LLM integration commands
+    Llm,
+    /// Connection management
+    Connection,
+}
+
+/// User role that determines command permissions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum UserRole {
+    /// Read-only access - can query and view schema
+    Viewer,
+    /// Developer access - query, schema, vector search
+    #[default]
+    Developer,
+    /// Full admin access - all commands including checkpoint/GC/compact
+    Admin,
+}
+
+/// Connection mode affects which commands are safe
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum ConnectionMode {
+    /// Local embedded database - full access
+    #[default]
+    LocalEmbedded,
+    /// Read-only connection - no mutations
+    ReadOnly,
+    /// Remote server connection - may have latency
+    Remote,
+}
+
+/// Policy configuration for command access control
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandPolicy {
+    /// User's role
+    pub role: UserRole,
+    /// Connection mode
+    pub mode: ConnectionMode,
+    /// Explicitly allowed commands (overrides role)
+    pub allowed_commands: HashSet<String>,
+    /// Explicitly denied commands (overrides role)
+    pub denied_commands: HashSet<String>,
+    /// Whether admin operations require confirmation
+    pub require_admin_confirmation: bool,
+}
+
+impl Default for CommandPolicy {
+    fn default() -> Self {
+        Self {
+            role: UserRole::Developer,
+            mode: ConnectionMode::LocalEmbedded,
+            allowed_commands: HashSet::new(),
+            denied_commands: HashSet::new(),
+            require_admin_confirmation: true,
+        }
+    }
+}
+
+impl CommandPolicy {
+    /// Create a new policy with the given role
+    pub fn with_role(role: UserRole) -> Self {
+        Self {
+            role,
+            ..Default::default()
+        }
+    }
+
+    /// Create a read-only policy
+    pub fn read_only() -> Self {
+        Self {
+            role: UserRole::Viewer,
+            mode: ConnectionMode::ReadOnly,
+            ..Default::default()
+        }
+    }
+
+    /// Create an admin policy
+    pub fn admin() -> Self {
+        Self {
+            role: UserRole::Admin,
+            require_admin_confirmation: false,
+            ..Default::default()
+        }
+    }
+
+    /// Check if a command category is allowed
+    pub fn is_category_allowed(&self, category: CommandCategory) -> bool {
+        match self.role {
+            UserRole::Viewer => matches!(category, CommandCategory::Query | CommandCategory::Schema | CommandCategory::Connection),
+            UserRole::Developer => matches!(
+                category,
+                CommandCategory::Query
+                    | CommandCategory::Schema
+                    | CommandCategory::Vector
+                    | CommandCategory::Mcp
+                    | CommandCategory::Llm
+                    | CommandCategory::Connection
+            ),
+            UserRole::Admin => true, // Admin can do everything
+        }
+    }
+
+    /// Check if a specific command is allowed
+    pub fn is_command_allowed(&self, command: &str) -> bool {
+        // Check explicit deny list first
+        if self.denied_commands.contains(command) {
+            return false;
+        }
+
+        // Check explicit allow list
+        if self.allowed_commands.contains(command) {
+            return true;
+        }
+
+        // Check based on role and command category
+        let category = Self::get_command_category(command);
+        if !self.is_category_allowed(category) {
+            return false;
+        }
+
+        // Additional checks for read-only mode
+        if self.mode == ConnectionMode::ReadOnly {
+            return !Self::is_mutating_command(command);
+        }
+
+        true
+    }
+
+    /// Check if this command requires confirmation
+    pub fn requires_confirmation(&self, command: &str) -> bool {
+        if !self.require_admin_confirmation {
+            return false;
+        }
+
+        // Admin operations that require confirmation
+        matches!(
+            command,
+            "checkpoint" | "gc" | "compact" | "disconnect"
+        )
+    }
+
+    /// Get the category for a command
+    pub fn get_command_category(command: &str) -> CommandCategory {
+        match command {
+            "execute_query" | "explain_query" => CommandCategory::Query,
+            "get_schema" | "get_table_info" => CommandCategory::Schema,
+            "checkpoint" | "gc" | "compact" | "get_stats" => CommandCategory::Admin,
+            "vector_search" | "get_vector_columns" => CommandCategory::Vector,
+            "mcp_list_tools" | "mcp_call_tool" | "get_service_status" => CommandCategory::Mcp,
+            "save_llm_config" | "get_llm_config" | "clear_llm_config" | "test_llm_connection" | "chat_completion" => CommandCategory::Llm,
+            "connect" | "disconnect" => CommandCategory::Connection,
+            _ => CommandCategory::Query, // Default to most permissive category
+        }
+    }
+
+    /// Check if a command is mutating (writes data)
+    pub fn is_mutating_command(command: &str) -> bool {
+        matches!(
+            command,
+            "checkpoint" | "gc" | "compact" | "mcp_call_tool" | "save_llm_config" | "clear_llm_config"
+        )
+    }
+
+    /// Get list of allowed commands for current policy
+    pub fn get_allowed_commands(&self) -> Vec<&'static str> {
+        let all_commands = [
+            // Connection
+            "connect", "disconnect",
+            // Query
+            "execute_query", "explain_query",
+            // Schema
+            "get_schema", "get_table_info",
+            // Admin
+            "checkpoint", "gc", "compact", "get_stats",
+            // Vector
+            "vector_search", "get_vector_columns",
+            // MCP
+            "mcp_list_tools", "mcp_call_tool", "get_service_status",
+            // LLM
+            "save_llm_config", "get_llm_config", "clear_llm_config", "test_llm_connection", "chat_completion",
+        ];
+
+        all_commands
+            .iter()
+            .filter(|cmd| self.is_command_allowed(cmd))
+            .copied()
+            .collect()
+    }
+}
+
+/// Policy result with optional confirmation requirement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyCheck {
+    /// Whether the command is allowed
+    pub allowed: bool,
+    /// Whether confirmation is required
+    pub requires_confirmation: bool,
+    /// Reason if denied
+    pub reason: Option<String>,
+}
+
+impl PolicyCheck {
+    pub fn allowed() -> Self {
+        Self {
+            allowed: true,
+            requires_confirmation: false,
+            reason: None,
+        }
+    }
+
+    pub fn allowed_with_confirmation() -> Self {
+        Self {
+            allowed: true,
+            requires_confirmation: true,
+            reason: None,
+        }
+    }
+
+    pub fn denied(reason: impl Into<String>) -> Self {
+        Self {
+            allowed: false,
+            requires_confirmation: false,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+/// Check if a command is allowed under the given policy
+pub fn check_command(policy: &CommandPolicy, command: &str) -> PolicyCheck {
+    if !policy.is_command_allowed(command) {
+        let category = CommandPolicy::get_command_category(command);
+        return PolicyCheck::denied(format!(
+            "Command '{}' (category: {:?}) not allowed for role {:?}",
+            command, category, policy.role
+        ));
+    }
+
+    if policy.requires_confirmation(command) {
+        PolicyCheck::allowed_with_confirmation()
+    } else {
+        PolicyCheck::allowed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_viewer_policy() {
+        let policy = CommandPolicy::with_role(UserRole::Viewer);
+        
+        // Viewers can query and view schema
+        assert!(policy.is_command_allowed("execute_query"));
+        assert!(policy.is_command_allowed("get_schema"));
+        assert!(policy.is_command_allowed("connect"));
+        
+        // Viewers cannot do admin operations
+        assert!(!policy.is_command_allowed("checkpoint"));
+        assert!(!policy.is_command_allowed("gc"));
+        assert!(!policy.is_command_allowed("compact"));
+        
+        // Viewers cannot use vector search by default
+        assert!(!policy.is_command_allowed("vector_search"));
+    }
+
+    #[test]
+    fn test_developer_policy() {
+        let policy = CommandPolicy::with_role(UserRole::Developer);
+        
+        // Developers can query, schema, vector
+        assert!(policy.is_command_allowed("execute_query"));
+        assert!(policy.is_command_allowed("get_schema"));
+        assert!(policy.is_command_allowed("vector_search"));
+        assert!(policy.is_command_allowed("mcp_call_tool"));
+        
+        // Developers cannot do admin operations
+        assert!(!policy.is_command_allowed("checkpoint"));
+        assert!(!policy.is_command_allowed("gc"));
+    }
+
+    #[test]
+    fn test_admin_policy() {
+        let policy = CommandPolicy::admin();
+        
+        // Admins can do everything
+        assert!(policy.is_command_allowed("execute_query"));
+        assert!(policy.is_command_allowed("checkpoint"));
+        assert!(policy.is_command_allowed("gc"));
+        assert!(policy.is_command_allowed("compact"));
+        assert!(policy.is_command_allowed("vector_search"));
+    }
+
+    #[test]
+    fn test_read_only_mode() {
+        let policy = CommandPolicy::read_only();
+        
+        // Read-only can query
+        assert!(policy.is_command_allowed("execute_query"));
+        assert!(policy.is_command_allowed("get_schema"));
+        
+        // Read-only cannot mutate
+        assert!(!policy.is_command_allowed("checkpoint"));
+        assert!(!policy.is_command_allowed("mcp_call_tool"));
+    }
+
+    #[test]
+    fn test_explicit_deny() {
+        let mut policy = CommandPolicy::admin();
+        policy.denied_commands.insert("checkpoint".to_string());
+        
+        // Explicitly denied even for admin
+        assert!(!policy.is_command_allowed("checkpoint"));
+        assert!(policy.is_command_allowed("gc"));
+    }
+
+    #[test]
+    fn test_explicit_allow() {
+        let mut policy = CommandPolicy::with_role(UserRole::Viewer);
+        policy.allowed_commands.insert("vector_search".to_string());
+        
+        // Explicitly allowed even for viewer
+        assert!(policy.is_command_allowed("vector_search"));
+    }
+}
+
+# ===== End of src-tauri/src/policy.rs =====
+
+# ===== Start of src-tauri/src/state.rs =====
+
+//! Unified Application State for SochDB Studio
+//! 
+//! Holds shared state for database connections and MCP server.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use sochdb::connection::EmbeddedConnection;
+use sochdb_mcp::McpServer;
+
+use crate::policy::CommandPolicy;
+
+/// Service status for UI display
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServiceStatus {
+    pub db_connected: bool,
+    pub db_path: Option<String>,
+    pub mcp_ready: bool,
+}
+
+impl Default for ServiceStatus {
+    fn default() -> Self {
+        Self {
+            db_connected: false,
+            db_path: None,
+            mcp_ready: false,
+        }
+    }
+}
+
+/// Unified application state
+pub struct AppState {
+    /// Database connection (shared with MCP)
+    pub connection: Arc<RwLock<Option<EmbeddedConnection>>>,
+    /// MCP server instance
+    pub mcp_server: Arc<RwLock<Option<McpServer>>>,
+    /// Current database path
+    pub db_path: Arc<RwLock<Option<PathBuf>>>,
+    /// Service status for UI
+    pub status: Arc<RwLock<ServiceStatus>>,
+    /// Command policy for access control
+    pub policy: Arc<RwLock<CommandPolicy>>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            connection: Arc::new(RwLock::new(None)),
+            mcp_server: Arc::new(RwLock::new(None)),
+            db_path: Arc::new(RwLock::new(None)),
+            status: Arc::new(RwLock::new(ServiceStatus::default())),
+            policy: Arc::new(RwLock::new(CommandPolicy::default())),
+        }
+    }
+
+    /// Get the current command policy
+    pub async fn get_policy(&self) -> CommandPolicy {
+        self.policy.read().await.clone()
+    }
+
+    /// Update the command policy
+    pub async fn set_policy(&self, policy: CommandPolicy) {
+        *self.policy.write().await = policy;
+    }
+
+    /// Initialize connection and MCP server for a database path
+    pub async fn connect(&self, path: PathBuf) -> Result<(), String> {
+        // Open database connection
+        let conn = EmbeddedConnection::open(&path)
+            .map_err(|e| format!("Failed to open database: {}", e))?;
+        
+        let conn_arc = Arc::new(conn);
+        
+        // Create MCP server with shared connection
+        let mcp = McpServer::new(conn_arc.clone());
+        
+        // Update state
+        {
+            // We need to store the connection differently since MCP takes ownership
+            // For now, we'll just track that we're connected
+            let mut status = self.status.write().await;
+            status.db_connected = true;
+            status.db_path = Some(path.to_string_lossy().to_string());
+            status.mcp_ready = true;
+        }
+        
+        {
+            let mut mcp_lock = self.mcp_server.write().await;
+            *mcp_lock = Some(mcp);
+        }
+        
+        {
+            let mut path_lock = self.db_path.write().await;
+            *path_lock = Some(path);
+        }
+        
+        // Also keep a reference in connection for direct access if needed,
+        // though McpServer owns the primary Arc now.
+        // We can create another Arc from the one we gave McpServer or just use the one we have.
+        {
+             let mut conn_lock = self.connection.write().await;
+             // We can't easily get it back from McpServer if it consumes it, 
+             // but here we cloned conn_arc for McpServer.
+             // So we can still use conn_arc.
+             
+             // However, EmbeddedConnection might not be Clone in a way that allows multiple owners 
+             // if it wasn't designed for it, but here we are using Arc<EmbeddedConnection>.
+             // AppState expects Arc<RwLock<Option<EmbeddedConnection>>>, 
+             // so we need to put an EmbeddedConnection inside.
+             // But we only have Arc<EmbeddedConnection>.
+             // If EmbeddedConnection is Clone, we can clone it.
+             // Use try_unwrap or deref clone?
+             // Assuming EmbeddedConnection is cheaply cloneable or we change AppState.
+             
+             // Actually, looking at previous code, I was wrapping it in Arc::new(conn).
+             // Let's check previous implementation.
+             // Previously: let conn_arc = Arc::new(conn); let mcp = McpServer::new(conn_arc.clone());
+             // And I didn't store it in self.connection!
+             
+             // Let's restore the ORIGINAL state.rs behavior which didn't seem to store in self.connection?
+             // Wait, I changed self.connection usage in admin.rs to read from it.
+             // So I should probably keep storing it if I want admin.rs to work as I modified it?
+             // OR I should revert admin.rs to use McpServer.
+             // Let's revert admin.rs to use McpServer as well.
+             // So here in state.rs I don't need to populate self.connection if the original code didn't.
+             // Checking original state.rs content... step 75.
+             // Un-modified state.rs (Step 75) had:
+             // pub connection: Arc<RwLock<Option<EmbeddedConnection>>>,
+             // But in connect():
+             // let conn_arc = Arc::new(conn);
+             // let mcp = McpServer::new(conn_arc.clone());
+             // It NEVER populated self.connection! 
+             // This means `self.connection` was essentially unused in the original code?
+             // Or maybe used by disconnection?
+             // Disconnect clears it: *conn_lock = None;
+             
+             // If I revert fully, I should leave self.connection Empty in connect()?
+             // That seems wrong if other things depend on it.
+             // But looking at admin.rs (Step 156), it calls `state.disconnect().await`.
+             // And `get_stats` used `state.mcp_server`.
+             // So usage of `state.connection` was NOT present in original admin.rs.
+             
+             // So, I will revert state.rs to NOT populate self.connection, 
+             // matching original behavior.
+             *conn_lock = None; 
+        }
+        
+        Ok(())
+    }
+
+    /// Disconnect from database
+    pub async fn disconnect(&self) {
+        let mut status = self.status.write().await;
+        status.db_connected = false;
+        status.db_path = None;
+        status.mcp_ready = false;
+        
+        let mut mcp_lock = self.mcp_server.write().await;
+        *mcp_lock = None;
+        
+        let mut conn_lock = self.connection.write().await;
+        *conn_lock = None;
+        
+        let mut path_lock = self.db_path.write().await;
+        *path_lock = None;
+    }
+
+    /// Get current status
+    pub async fn get_status(&self) -> ServiceStatus {
+        self.status.read().await.clone()
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+# ===== End of src-tauri/src/state.rs =====

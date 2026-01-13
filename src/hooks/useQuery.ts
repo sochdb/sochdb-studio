@@ -3,7 +3,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { useToonDB, QueryResult } from './useToonDB';
+import { useSochDB, QueryResult } from './useSochDB';
 
 export interface QueryState {
     query: string;
@@ -22,7 +22,7 @@ export interface QueryHistoryEntry {
 }
 
 export function useQuery() {
-    const { executeQuery: executeQueryCmd } = useToonDB();
+    const { executeQuery: executeQueryCmd } = useSochDB();
 
     const [query, setQuery] = useState('SELECT * FROM users LIMIT 100');
     const [result, setResult] = useState<QueryResult | null>(null);

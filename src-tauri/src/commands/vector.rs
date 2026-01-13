@@ -32,7 +32,7 @@ pub async fn vector_search(
     let mcp_lock = state.mcp_server.read().await;
     let mcp = mcp_lock.as_ref().ok_or("MCP server not initialized")?;
     
-    let req = toondb_mcp::RpcRequest {
+    let req = sochdb_mcp::RpcRequest {
         jsonrpc: "2.0".to_string(),
         id: serde_json::Value::Number(1.into()),
         method: "tools/call".to_string(),

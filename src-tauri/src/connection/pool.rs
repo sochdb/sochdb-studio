@@ -1,10 +1,10 @@
-//! Connection pool for ToonDB connections
+//! Connection pool for SochDB connections
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use toondb::DurableToonClient;
+use sochdb::DurableSochClient;
 
 /// Connection pool entry
 #[allow(dead_code)]
@@ -12,7 +12,7 @@ use toondb::DurableToonClient;
 pub struct PoolEntry {
     pub path: String,
     pub connected: bool,
-    pub client: Option<Arc<DurableToonClient>>,
+    pub client: Option<Arc<DurableSochClient>>,
 }
 
 /// Connection pool for managing multiple database connections
@@ -30,7 +30,7 @@ impl ConnectionPool {
     }
 
     /// Add a connection to the pool
-    pub async fn add(&self, id: String, path: String, client: Arc<DurableToonClient>) -> Result<(), String> {
+    pub async fn add(&self, id: String, path: String, client: Arc<DurableSochClient>) -> Result<(), String> {
         let mut conns = self.connections.write().await;
         conns.insert(
             id,

@@ -1,12 +1,12 @@
-//! Unified Application State for ToonDB Studio
+//! Unified Application State for SochDB Studio
 //! 
 //! Holds shared state for database connections and MCP server.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use toondb::connection::EmbeddedConnection;
-use toondb_mcp::McpServer;
+use sochdb::connection::EmbeddedConnection;
+use sochdb_mcp::McpServer;
 
 use crate::policy::CommandPolicy;
 

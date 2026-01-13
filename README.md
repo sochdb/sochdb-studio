@@ -1,6 +1,6 @@
-# ToonDB Studio
+# SochDB Studio
 
-**ToonDB Studio** is a professional desktop database administration tool for ToonDB, built with Tauri 2.0. It provides a modern, intuitive interface for managing ToonDB databases.
+**SochDB Studio** is a professional desktop database administration tool for SochDB, built with Tauri 2.0. It provides a modern, intuitive interface for managing SochDB databases.
 
 Similar to:
 - **DBeaver** (SQL databases)
@@ -12,7 +12,7 @@ Similar to:
 ## Features
 
 ### 🗂️ Multi-Connection Support
-- Manage multiple ToonDB instances
+- Manage multiple SochDB instances
 - Local file, Unix socket, TCP/IP, and embedded connections
 - Connection persistence and auto-reconnect
 
@@ -90,7 +90,7 @@ npm run tauri build
 ### Project Structure
 
 ```
-toondb-studio/
+sochdb-studio/
 ├── src-tauri/              # Rust backend
 │   ├── src/
 │   │   ├── commands/       # Tauri IPC commands
@@ -104,7 +104,7 @@ toondb-studio/
 ├── src/                    # React frontend
 │   ├── components/
 │   ├── hooks/
-│   │   ├── useToonDB.ts    # ToonDB API hook
+│   │   ├── useSochDB.ts    # SochDB API hook
 │   │   ├── useQuery.ts     # Query state
 │   │   └── useSchema.ts    # Schema state
 │   ├── stores/

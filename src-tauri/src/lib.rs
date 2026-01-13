@@ -1,7 +1,7 @@
-//! ToonDB Studio - Database Administration Tool
+//! SochDB Studio - Database Administration Tool
 //! 
-//! A Tauri 2.0 desktop application for managing ToonDB databases.
-//! Similar to DBeaver, TablePlus, MongoDB Compass - but for ToonDB.
+//! A Tauri 2.0 desktop application for managing SochDB databases.
+//! Similar to DBeaver, TablePlus, MongoDB Compass - but for SochDB.
 
 mod commands;
 mod connection;

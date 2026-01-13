@@ -32,7 +32,7 @@ pub struct ConnectionInfo {
     pub uptime_seconds: u64,
 }
 
-/// Connect to a ToonDB database
+/// Connect to a SochDB database
 #[tauri::command]
 pub async fn connect(
     state: State<'_, Arc<AppState>>,
