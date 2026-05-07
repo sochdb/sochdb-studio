@@ -1,0 +1,33 @@
+services:
+  studio-backend:
+    build:
+      context: ../..
+      dockerfile: deploy/self-hosted/Dockerfile.backend
+    container_name: sochdb-studio-backend
+    environment:
+      STUDIO_BACKEND_PORT: 4318
+      STUDIO_BACKEND_STATE_PATH: /data/studio-state.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - studio_state:/data
+    ports:
+      - "127.0.0.1:4318:4318"
+    restart: unless-stopped
+
+  studio-frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/self-hosted/Dockerfile.frontend
+      args:
+        VITE_STUDIO_API_BASE_URL: ""
+    container_name: sochdb-studio-frontend
+    depends_on:
+      - studio-backend
+    ports:
+      - "80:80"
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  studio_state:

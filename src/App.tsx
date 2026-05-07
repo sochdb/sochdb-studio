@@ -1,7 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
+import WorkbenchView from './features/workbench/WorkbenchView';
+import {
+  getStudioDesktopHttpOverride,
+  setStudioDesktopHttpOverride,
+  studioBackendBaseUrl,
+  studioClientMode,
+  studioDataClient,
+  type ConnectionInfo,
+  type StudioApiKey,
+  type StudioIngestEvent,
+  type StudioInstance,
+  type StudioWorkspace,
+} from './lib/studioDataClient';
 import './App.css';
 
 // SVG Icons component with new 'clean' style
@@ -64,45 +76,21 @@ const SochIcon = ({ size = 24 }: { size?: number }) => (
 
 // --- Components ---
 
-const TitleBar = () => {
-  return (
-    <div className="h-10 flex items-center justify-between select-none z-50 px-3 pt-3 app-region-drag" data-tauri-drag-region>
-      <div className="flex items-center gap-3 pointer-events-none">
-        <SochIcon size={20} />
-        <span className="text-sm font-medium text-text-muted tracking-wide">SochDB Studio</span>
-        <span className="bg-background-muted text-text-muted text-[10px] px-2 py-0.5 rounded-full border border-border-default">BETA</span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <div className="flex bg-background-muted rounded-lg p-1 border border-border-default backdrop-blur-sm">
-          <button
-            onClick={() => getCurrentWindow().minimize()}
-            className="p-1 hover:bg-background-medium rounded text-text-muted hover:text-text-default transition-colors"
-          >
-            <Icon name="minimize" size={14} />
-          </button>
-          <button
-            onClick={() => getCurrentWindow().toggleMaximize()}
-            className="p-1 hover:bg-background-medium rounded text-text-muted hover:text-text-default transition-colors"
-          >
-            <Icon name="maximize" size={14} />
-          </button>
-          <button
-            onClick={() => getCurrentWindow().close()}
-            className="p-1 hover:bg-red-500/20 rounded text-text-muted hover:text-red-400 transition-colors"
-          >
-            <Icon name="x" size={14} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // --- Sidebar Component ---
-const Sidebar = ({ activeTab, setActiveTab, connected }: { activeTab: string, setActiveTab: (tab: string) => void, connected: boolean }) => {
+const Sidebar = ({
+  activeTab,
+  setActiveTab,
+  connected,
+  onSwitchConnection,
+}: {
+  activeTab: string,
+  setActiveTab: (tab: string) => void,
+  connected: boolean,
+  onSwitchConnection: () => void,
+}) => {
   const menuItems = [
     { id: 'dashboard', label: 'Overview', icon: 'layout' },
+    { id: 'workbench', label: 'Workbench', icon: 'search' },
     { id: 'query', label: 'Query Engine', icon: 'play' },
     { id: 'explorer', label: 'KV Explorer', icon: 'database' },
     { id: 'assistant', label: 'AI Assistant', icon: 'zap' },
@@ -129,6 +117,13 @@ const Sidebar = ({ activeTab, setActiveTab, connected }: { activeTab: string, se
         <div className="text-[10px] text-text-muted font-mono truncate">
           0.1.0
         </div>
+        <button
+          type="button"
+          onClick={onSwitchConnection}
+          className="mt-3 w-full px-3 py-2 rounded-lg border border-border-default bg-background-app text-text-muted hover:text-text-default hover:bg-background-muted/70 transition-colors text-xs font-semibold"
+        >
+          Switch Connection
+        </button>
       </div>
 
       <nav className="flex-1 space-y-1">
@@ -156,7 +151,7 @@ const Sidebar = ({ activeTab, setActiveTab, connected }: { activeTab: string, se
       </nav>
 
       <div className="mt-auto px-2 py-4 border-t border-border-default">
-        <p className="text-[10px] text-center text-text-muted opacity-50">SochDB Studio © 2024</p>
+        <p className="text-[10px] text-center text-text-muted opacity-50">SochDB Studio © {new Date().getFullYear()}</p>
       </div>
     </div>
   );
@@ -179,8 +174,8 @@ const StatCard = ({ icon, label, value, sub, color }: any) => {
         <div className={`p-2.5 rounded-xl border ${theme}`}>
           <Icon name={icon} size={20} />
         </div>
-        <span className="text-xs font-mono text-text-muted bg-background-muted px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity">
-          2s ago
+        <span className="text-[10px] font-mono text-text-muted bg-background-muted px-2 py-1 rounded-md border border-border-default opacity-80">
+          LIVE
         </span>
       </div>
       <div>
@@ -191,7 +186,6 @@ const StatCard = ({ icon, label, value, sub, color }: any) => {
     </div>
   );
 };
-
 
 // --- LLM Settings Tab Component ---
 const LlmSettingsTab = () => {
@@ -567,9 +561,26 @@ When the user asks about data, use the appropriate tools. Always be helpful and 
 
 
 // --- Settings View with Working Tabs and Theme Toggle ---
-const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme: (t: string) => void, connected: boolean }) => {
+const SettingsView = ({
+  theme,
+  setTheme,
+  connected,
+  connectionInfo,
+}: {
+  theme: string,
+  setTheme: (t: string) => void,
+  connected: boolean,
+  connectionInfo?: ConnectionInfo | null,
+}) => {
   const [copied, setCopied] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState('mcp');
+  const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
+  const [platformLoading, setPlatformLoading] = useState(false);
+  const [selectedPlatformProjectId, setSelectedPlatformProjectId] = useState('');
+  const [apiKeyName, setApiKeyName] = useState('Studio SDK Key');
+  const [lastCreatedKey, setLastCreatedKey] = useState<{ apiKey: StudioApiKey; secret: string } | null>(null);
+  const [platformError, setPlatformError] = useState<string | null>(null);
+  const [projectEvents, setProjectEvents] = useState<StudioIngestEvent[]>([]);
 
   const mcpConfig = {
     mcpServers: {
@@ -592,7 +603,71 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
     });
   };
 
-  const tabs = ['General', 'Connection', 'LLM', 'MCP', 'About'];
+  const isWebMode = studioClientMode === 'http';
+  const tabs = ['General', 'Connection', 'Platform', 'LLM', 'MCP', 'About'];
+
+  useEffect(() => {
+    if (!isWebMode) return;
+    void studioDataClient.listWorkspaces()
+      .then((nextWorkspaces) => {
+        setWorkspaces(nextWorkspaces);
+        if (!selectedPlatformProjectId) {
+          const preferredProjectId =
+            connectionInfo?.projectId ||
+            nextWorkspaces[0]?.projects?.[0]?.id ||
+            '';
+          setSelectedPlatformProjectId(preferredProjectId);
+        }
+      })
+      .catch((error) => {
+        setPlatformError(error instanceof Error ? error.message : String(error));
+      });
+  }, [isWebMode, connectionInfo?.projectId]);
+
+  const selectedPlatformProject = workspaces
+    .flatMap((workspace) => workspace.projects)
+    .find((project) => project.id === selectedPlatformProjectId) || null;
+
+  const refreshPlatformEvents = async (projectId: string) => {
+    if (!isWebMode || !projectId) return;
+    try {
+      const response = await studioDataClient.listEvents({ projectId, limit: 20 });
+      setProjectEvents(response.events);
+    } catch (error) {
+      setPlatformError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedPlatformProjectId || !isWebMode) return;
+    void refreshPlatformEvents(selectedPlatformProjectId);
+  }, [selectedPlatformProjectId, isWebMode]);
+
+  const handleCreateApiKey = async () => {
+    if (!selectedPlatformProjectId) return;
+    setPlatformLoading(true);
+    setPlatformError(null);
+    try {
+      const result = await studioDataClient.createApiKey({
+        projectId: selectedPlatformProjectId,
+        name: apiKeyName,
+      });
+      setLastCreatedKey(result);
+      const nextWorkspaces = await studioDataClient.listWorkspaces();
+      setWorkspaces(nextWorkspaces);
+    } catch (error) {
+      setPlatformError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPlatformLoading(false);
+    }
+  };
+
+  const copyLastApiKey = async () => {
+    if (!lastCreatedKey?.secret) return;
+    await navigator.clipboard.writeText(lastCreatedKey.secret);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="flex flex-col h-full animate-in p-8 overflow-y-auto">
@@ -664,6 +739,180 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
           </div>
         )}
 
+        {activeSettingsTab === 'platform' && (
+          <div className="space-y-6">
+            {!isWebMode ? (
+              <div className="p-6 rounded-xl border border-border-default bg-background-muted/30">
+                <h3 className="text-lg font-semibold text-text-default mb-2">Platform Layer</h3>
+                <p className="text-sm text-text-muted">
+                  API keys, ingestion, and shared project state are available in Studio web mode.
+                  Switch to the HTTP-backed Studio frontend to manage workspace-level access.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="p-6 rounded-xl border border-border-default bg-background-muted/30">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div>
+                      <h3 className="text-lg font-semibold text-text-default mb-2">Project API Keys</h3>
+                      <p className="text-sm text-text-muted">
+                        Issue project-scoped credentials for SDK ingestion and backend event writes.
+                      </p>
+                    </div>
+                    <div className="text-xs text-text-muted font-mono">
+                      {studioBackendBaseUrl || 'http://127.0.0.1:4318'}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Project</label>
+                      <select
+                        value={selectedPlatformProjectId}
+                        onChange={(e) => setSelectedPlatformProjectId(e.target.value)}
+                        className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm outline-none"
+                      >
+                        <option value="">Select a project...</option>
+                        {workspaces.flatMap((workspace) =>
+                          workspace.projects.map((project) => (
+                            <option key={project.id} value={project.id}>
+                              {workspace.name} / {project.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">API Key Name</label>
+                      <input
+                        type="text"
+                        value={apiKeyName}
+                        onChange={(e) => setApiKeyName(e.target.value)}
+                        placeholder="Production SDK Key"
+                        className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => void handleCreateApiKey()}
+                      disabled={!selectedPlatformProjectId || !apiKeyName.trim() || platformLoading}
+                      className="px-4 py-2 bg-teal hover:bg-teal/90 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {platformLoading ? 'Creating...' : 'Create API Key'}
+                    </button>
+                    {selectedPlatformProject && (
+                      <div className="text-xs text-text-muted">
+                        {(selectedPlatformProject.apiKeys || []).length} keys issued, {selectedPlatformProject.eventCount || 0} ingested events
+                      </div>
+                    )}
+                  </div>
+
+                  {platformError && (
+                    <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                      {platformError}
+                    </div>
+                  )}
+
+                  {lastCreatedKey && (
+                    <div className="mt-4 rounded-xl border border-teal/30 bg-teal/10 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-semibold text-text-default mb-1">New API key created</div>
+                          <div className="text-xs text-text-muted mb-3">
+                            Copy this now. Studio only shows the secret once.
+                          </div>
+                          <div className="font-mono text-xs break-all text-text-default bg-background-app rounded-lg px-3 py-2 border border-border-default">
+                            {lastCreatedKey.secret}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => void copyLastApiKey()}
+                          className="px-3 py-2 rounded-lg border border-border-default bg-background-app text-text-default text-xs font-medium"
+                        >
+                          {copied ? 'Copied' : 'Copy secret'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-6 rounded-xl border border-border-default bg-background-muted/30">
+                  <h3 className="text-lg font-semibold text-text-default mb-2">SDK Ingestion</h3>
+                  <p className="text-sm text-text-muted mb-4">
+                    This is the first shared event lane toward a Langfuse-style control plane. SDKs can POST events to the Studio backend using a project API key.
+                  </p>
+                  <pre className="p-4 text-xs font-mono text-text-muted overflow-x-auto rounded-lg bg-background-app border border-border-default">
+{`curl -X POST ${(studioBackendBaseUrl || 'http://127.0.0.1:4318')}/api/studio/ingest/events \\
+  -H "Authorization: Bearer soch_sk_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "source": "python-sdk",
+    "events": [
+      {
+        "type": "retrieval",
+        "name": "semantic-search",
+        "status": "ok",
+        "metadata": { "top_k": 5, "latency_ms": 42 }
+      }
+    ]
+  }'`}
+                  </pre>
+                </div>
+
+                <div className="p-6 rounded-xl border border-border-default bg-background-muted/30">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <div>
+                      <h3 className="text-lg font-semibold text-text-default mb-2">Recent Ingestion Events</h3>
+                      <p className="text-sm text-text-muted">
+                        Shared project activity written through Studio’s backend API.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => selectedPlatformProjectId && void refreshPlatformEvents(selectedPlatformProjectId)}
+                      disabled={!selectedPlatformProjectId}
+                      className="px-3 py-2 rounded-lg border border-border-default bg-background-app text-text-default text-xs font-medium disabled:opacity-50"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+
+                  {projectEvents.length === 0 ? (
+                    <div className="text-sm text-text-muted">
+                      No ingested events yet for this project.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {projectEvents.map((event) => (
+                        <div key={event.id} className="rounded-xl border border-border-default bg-background-app px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-1 rounded-md bg-teal/10 border border-teal/20 text-[10px] uppercase tracking-wider text-teal">
+                                {event.type}
+                              </span>
+                              <span className="text-sm font-medium text-text-default">{event.name}</span>
+                            </div>
+                            <span className="text-xs text-text-muted">{new Date(event.timestamp).toLocaleString()}</span>
+                          </div>
+                          <div className="text-xs text-text-muted">
+                            source: {event.source || 'sdk'} • status: {event.status || 'recorded'}
+                          </div>
+                          {event.metadata && Object.keys(event.metadata).length > 0 && (
+                            <pre className="mt-3 text-xs font-mono text-text-muted whitespace-pre-wrap bg-background-muted/40 rounded-lg p-3 border border-border-default">
+                              {JSON.stringify(event.metadata, null, 2)}
+                            </pre>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* LLM Tab */}
         {activeSettingsTab === 'llm' && (
           <LlmSettingsTab />
@@ -720,8 +969,40 @@ const SettingsView = ({ theme, setTheme, connected }: { theme: string, setTheme:
 
 
 // ... Connection Modal ...
-const ConnectionModal = ({ onConnect }: any) => {
-  const [dbPath, setDbPath] = useState('');
+const ConnectionModal = ({
+  onConnect,
+  onPreview,
+  errorMessage,
+  connecting,
+  clientMode,
+  backendBaseUrl,
+}: any) => {
+  const [dbPath, setDbPath] = useState(
+    () => localStorage.getItem("last_db_path") || ''
+  );
+  const [projectName, setProjectName] = useState('');
+  const [workspaces, setWorkspaces] = useState<StudioWorkspace[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [instanceName, setInstanceName] = useState('');
+  const [selectedInstanceId, setSelectedInstanceId] = useState('');
+  const [instanceType, setInstanceType] = useState<'embedded' | 'remote'>('embedded');
+  const [remoteHost, setRemoteHost] = useState('');
+  const [remotePort, setRemotePort] = useState('50051');
+  const [remoteApiKey, setRemoteApiKey] = useState('');
+  const [remoteTls, setRemoteTls] = useState(false);
+  const [desktopHostedMode, setDesktopHostedMode] = useState(Boolean(getStudioDesktopHttpOverride()));
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const workspaceSectionRef = useRef<HTMLDivElement | null>(null);
+  const projectSelectRef = useRef<HTMLSelectElement | null>(null);
+  const isWebMode = clientMode === 'http';
+  const hostedDesktopBaseUrl = 'http://studio.agentslab.host:3000';
+  const isHostedMode = isWebMode || desktopHostedMode;
+  const isTauriRuntime = typeof window !== 'undefined' && Boolean((window as any).__TAURI_INTERNALS__);
+  const isLockError = Boolean(errorMessage?.toLowerCase().includes('lock'));
+  const isPermissionError = Boolean(
+    errorMessage?.toLowerCase().includes('permission') ||
+    errorMessage?.toLowerCase().includes('operation not permitted')
+  );
 
   async function pickDir() {
     try {
@@ -732,60 +1013,368 @@ const ConnectionModal = ({ onConnect }: any) => {
     }
   }
 
+  useEffect(() => {
+    if (!isHostedMode) return;
+    void studioDataClient.listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
+  }, [isHostedMode]);
+
+  const defaultWorkspace = workspaces[0];
+  const knownProjects = defaultWorkspace?.projects || [];
+  const selectedProject = knownProjects.find((project) => project.id === selectedProjectId) || null;
+  const knownInstances: StudioInstance[] = selectedProject?.instances || [];
+  const selectedInstance = knownInstances.find((instance) => instance.id === selectedInstanceId) || null;
+  const hostedDemoPreset = {
+    name: 'Hosted Demo Server',
+    host: 'studio.agentslab.host',
+    port: '50053',
+    tls: false,
+  };
+  useEffect(() => {
+    if (selectedProject) {
+      setProjectName(selectedProject.name);
+      const primaryInstance = (selectedProject.instances || [])[0];
+      setSelectedInstanceId(primaryInstance?.id || '');
+      setInstanceName(primaryInstance?.name || '');
+      setInstanceType(primaryInstance?.type === 'remote' ? 'remote' : 'embedded');
+      setDbPath(primaryInstance?.dbPath || '');
+      setRemoteHost(primaryInstance?.host || '');
+      setRemotePort(primaryInstance?.port ? String(primaryInstance.port) : '50051');
+      setRemoteApiKey(primaryInstance?.apiKey || '');
+      setRemoteTls(Boolean(primaryInstance?.tls));
+    }
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (selectedInstance) {
+      setInstanceName(selectedInstance.name);
+      setInstanceType(selectedInstance.type === 'remote' ? 'remote' : 'embedded');
+      setDbPath(selectedInstance.dbPath || '');
+      setRemoteHost(selectedInstance.host || '');
+      setRemotePort(selectedInstance.port ? String(selectedInstance.port) : '50051');
+      setRemoteApiKey(selectedInstance.apiKey || '');
+      setRemoteTls(Boolean(selectedInstance.tls));
+    }
+  }, [selectedInstanceId]);
+
+  const focusWorkspaceProjectSection = () => {
+    workspaceSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => {
+      projectSelectRef.current?.focus();
+    }, 150);
+  };
+
+  const applyHostedDemoPreset = () => {
+    setStudioDesktopHttpOverride(hostedDesktopBaseUrl);
+    setDesktopHostedMode(true);
+    setInstanceType('remote');
+    setInstanceName(hostedDemoPreset.name);
+    setRemoteHost(hostedDemoPreset.host);
+    setRemotePort(hostedDemoPreset.port);
+    setRemoteTls(hostedDemoPreset.tls);
+    setRemoteApiKey('');
+    contentRef.current?.scrollTo({ top: contentRef.current.scrollHeight, behavior: 'smooth' });
+  };
+
+  const activateLocalStorageMode = () => {
+    setStudioDesktopHttpOverride(null);
+    setDesktopHostedMode(false);
+    setInstanceType('embedded');
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in">
-      <div className="bg-background-default border border-border-default rounded-2xl w-full max-w-4xl flex overflow-hidden shadow-2xl h-[500px]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in overflow-y-auto">
+      <div className="bg-background-default border border-border-default rounded-2xl w-full max-w-4xl flex overflow-hidden shadow-2xl max-h-[90vh] min-h-[500px]">
         {/* Sidebar */}
-        <div className="w-72 bg-background-muted/50 border-r border-border-default p-6 flex flex-col gap-2">
+        <div className="w-72 bg-background-muted/50 border-r border-border-default p-6 flex flex-col gap-2 overflow-y-auto">
           <h2 className="text-lg font-bold text-text-default mb-6 flex items-center gap-2">
             <SochIcon size={24} /> SochDB
           </h2>
-          <button className="flex items-center gap-3 px-4 py-3 rounded-xl bg-background-app border border-border-accent text-text-default shadow-sm">
-            <Icon name="database" size={18} className="text-teal" />
+          <button
+            type="button"
+            onClick={activateLocalStorageMode}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl bg-background-app border border-border-accent text-text-default shadow-sm text-left"
+          >
+            <Icon name={isHostedMode ? "zap" : "database"} size={18} className="text-teal" />
             <div className="text-left">
-              <div className="text-sm font-semibold">Local Storage</div>
-              <div className="text-[10px] text-text-muted">Embedded LSM Engine</div>
+              <div className="text-sm font-semibold">{isHostedMode ? 'Studio Backend' : 'Local Storage'}</div>
+              <div className="text-[10px] text-text-muted">
+                {isHostedMode ? 'Desktop UI connected to hosted Studio over HTTP' : 'Embedded LSM Engine'}
+              </div>
             </div>
           </button>
-          <button className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-background-muted text-text-muted transition-colors opacity-50 cursor-not-allowed">
-            <Icon name="zap" size={18} />
-            <div className="text-left">
-              <div className="text-sm font-semibold">Remote Server</div>
-              <div className="text-[10px] text-text-muted">Connect via TCP/HTTP</div>
-            </div>
-          </button>
+          {isHostedMode ? (
+            <button
+              type="button"
+              onClick={focusWorkspaceProjectSection}
+              className="flex items-center gap-3 px-4 py-3 rounded-xl bg-background-muted/60 border border-border-default text-text-default transition-colors hover:bg-background-muted hover:border-border-accent text-left"
+            >
+              <Icon name="layout" size={18} className="text-teal" />
+              <div className="text-left">
+                <div className="text-sm font-semibold">{isWebMode ? 'Workspace / Project' : 'Remote Server'}</div>
+                <div className="text-[10px] text-text-muted">
+                  {isWebMode ? 'Select the hosted workspace, project, and instance' : 'Load the hosted server experience inside this app'}
+                </div>
+              </div>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={applyHostedDemoPreset}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-background-muted/60 border border-border-default text-text-default transition-colors hover:bg-background-muted hover:border-border-accent text-left"
+            >
+              <Icon name="layout" size={18} className="text-teal" />
+              <div className="text-left">
+                <div className="text-sm font-semibold">Remote Server</div>
+                <div className="text-[10px] text-text-muted">
+                  Load the hosted server experience inside this app
+                </div>
+              </div>
+            </button>
+          )}
         </div>
 
         {/* Content */}
-        <div className="flex-1 p-8 flex flex-col bg-mesh relative">
+        <div ref={contentRef} className="flex-1 p-8 flex flex-col bg-mesh relative overflow-y-auto">
           <div className="mb-8">
-            <h1 className="text-2xl font-bold text-text-default mb-2">Connect to Database</h1>
-            <p className="text-text-muted">Select a directory to initialize or load a SochDB instance.</p>
+            <h1 className="text-2xl font-bold text-text-default mb-2">
+              {isWebMode ? 'Connect Through Studio Backend' : 'Connect to Database'}
+            </h1>
+            <p className="text-text-muted">
+              {isWebMode
+                ? 'The browser app talks to a Studio backend over HTTP. For now, choose the SochDB data path that backend should open.'
+                : 'Select a directory to initialize or load a SochDB instance.'}
+            </p>
           </div>
 
           <div className="space-y-4 max-w-lg">
-            <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Data Directory</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={dbPath}
-                onChange={(e) => setDbPath(e.target.value)}
-                placeholder="/path/to/data"
-                className="flex-1 bg-background-input border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/50"
-              />
-              <button onClick={pickDir} className="px-4 py-2 bg-background-muted border border-border-default hover:bg-background-medium rounded-lg text-text-muted hover:text-text-default transition-colors">
-                <Icon name="folder" size={18} />
+            {isHostedMode && (
+              <div className="rounded-xl border border-border-default bg-background-muted/60 px-4 py-3 text-sm text-text-muted">
+                <div className="text-xs font-semibold uppercase tracking-wider text-text-muted mb-2">Backend Endpoint</div>
+                <div className="font-mono text-text-default break-all">
+                  {backendBaseUrl || hostedDesktopBaseUrl}
+                </div>
+                <div className="mt-2 text-xs text-text-muted/80">
+                  The app talks to the hosted Studio backend here, and that backend manages your workspace, projects, and remote instances.
+                </div>
+              </div>
+            )}
+
+            {isHostedMode && (
+              <div ref={workspaceSectionRef} className="space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Workspace</label>
+                  <div className="mt-2 rounded-lg border border-border-default bg-background-app px-4 py-2.5 text-sm text-text-default">
+                    {defaultWorkspace?.name || 'Default Workspace'}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Known Projects</label>
+                  <select
+                    ref={projectSelectRef}
+                    value={selectedProjectId}
+                    onChange={(e) => setSelectedProjectId(e.target.value)}
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm outline-none"
+                  >
+                    <option value="">Create or connect a new project</option>
+                    {knownProjects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Project Name</label>
+                  <input
+                    type="text"
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    placeholder="e.g. customer-search-prod"
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Instances</label>
+                  <select
+                    value={selectedInstanceId}
+                    onChange={(e) => setSelectedInstanceId(e.target.value)}
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm outline-none"
+                    disabled={!selectedProject}
+                  >
+                    <option value="">Create or connect a new instance</option>
+                    {knownInstances.map((instance) => (
+                      <option key={instance.id} value={instance.id}>
+                        {instance.name} ({instance.type})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Instance Name</label>
+                  <input
+                    type="text"
+                    value={instanceName}
+                    onChange={(e) => setInstanceName(e.target.value)}
+                    placeholder="e.g. primary-embedded or prod-cluster"
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Instance Type</label>
+                  <select
+                    value={instanceType}
+                    onChange={(e) => setInstanceType(e.target.value as 'embedded' | 'remote')}
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm outline-none"
+                  >
+                    <option value="embedded">Embedded</option>
+                    <option value="remote">Remote</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {instanceType === 'embedded' ? (
+              <>
+                <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+                  {isWebMode ? 'Database Path On Backend' : 'Data Directory'}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={dbPath}
+                    onChange={(e) => setDbPath(e.target.value)}
+                    placeholder={isWebMode ? "/srv/sochdb/data or ./sochdb_data" : "/path/to/data"}
+                    className="flex-1 bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                  />
+                  <button
+                    onClick={pickDir}
+                    className="px-4 py-2 bg-background-muted border border-border-default hover:bg-background-medium rounded-lg text-text-muted hover:text-text-default transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!isTauriRuntime || isWebMode}
+                    title={
+                      isWebMode
+                        ? 'Folder picking is a desktop-only feature. In web mode, enter the backend-visible data path.'
+                        : isTauriRuntime
+                          ? 'Pick a folder'
+                          : 'Native folder picker is available in the Tauri desktop app'
+                    }
+                  >
+                    <Icon name="folder" size={18} />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Remote Host</label>
+                  <input
+                    type="text"
+                    value={remoteHost}
+                    onChange={(e) => setRemoteHost(e.target.value)}
+                    placeholder="sochdb.example.internal"
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">Port</label>
+                  <input
+                    type="text"
+                    value={remotePort}
+                    onChange={(e) => setRemotePort(e.target.value)}
+                    placeholder="50051"
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wider">API Key</label>
+                  <input
+                    type="password"
+                    value={remoteApiKey}
+                    onChange={(e) => setRemoteApiKey(e.target.value)}
+                    placeholder="sk_live_..."
+                    className="mt-2 w-full bg-background-app border border-border-input rounded-lg px-4 py-2.5 text-text-default text-sm font-medium focus:ring-2 focus:ring-teal/50 outline-none transition-all placeholder:text-text-muted/70"
+                  />
+                </div>
+                <label className="flex items-center gap-3 text-sm text-text-default">
+                  <input
+                    type="checkbox"
+                    checked={remoteTls}
+                    onChange={(e) => setRemoteTls(e.target.checked)}
+                    className="rounded border-border-default bg-background-app"
+                  />
+                  Use TLS for remote connection
+                </label>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2 text-xs">
+              <button
+                onClick={() => {
+                  localStorage.removeItem("last_db_path");
+                  setDbPath('');
+                }}
+                className="px-3 py-1.5 rounded-md border border-border-default bg-background-muted text-text-muted hover:text-text-default transition-colors"
+              >
+                Clear Saved Path
               </button>
+              {isWebMode ? (
+                <span className="text-text-muted/80">
+                  {instanceType === 'embedded'
+                    ? 'In hosted mode, this path is interpreted by the Studio backend, not your browser.'
+                    : 'Remote instances now connect through the hosted Studio backend over gRPC. Today that supports health, collection discovery, and metadata-oriented queries first.'}
+                </span>
+              ) : instanceType === 'remote' ? (
+                <span className="text-text-muted/80">
+                  The remote server flow stays inside this app. Use the hosted preset or enter a SochDB host and port directly.
+                </span>
+              ) : !isTauriRuntime ? (
+                <span className="text-text-muted/80">
+                  Native folder picker works in the desktop app. In the browser, paste a directory path manually.
+                </span>
+              ) : null}
             </div>
+            {errorMessage && (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300 space-y-3">
+                <div>{errorMessage}</div>
+                {isLockError && (
+                  <div className="text-red-200/90 text-xs leading-relaxed">
+                    Another SochDB or Studio process is already using this data directory.
+                    Close the other process or choose a different directory for this connection.
+                  </div>
+                )}
+                {isPermissionError && (
+                  <div className="text-red-200/90 text-xs leading-relaxed">
+                    Studio does not have permission to use this path. Pick a writable directory under your user workspace.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="mt-auto flex justify-end">
+          <div className="mt-auto flex justify-between items-center gap-3">
             <button
-              onClick={() => onConnect(dbPath)}
-              disabled={!dbPath}
+              onClick={onPreview}
+              className="px-4 py-2.5 rounded-lg border border-border-default bg-background-muted text-text-muted hover:text-text-default transition-colors"
+            >
+              Open Workbench Preview
+            </button>
+            <button
+              onClick={() => onConnect(dbPath, {
+                projectId: selectedProjectId || undefined,
+                projectName: projectName || undefined,
+                instanceId: selectedInstanceId || undefined,
+                instanceName: instanceName || undefined,
+                instanceType,
+                host: remoteHost || undefined,
+                port: remotePort ? Number(remotePort) : undefined,
+                apiKey: remoteApiKey || undefined,
+                tls: remoteTls,
+                workspaceId: defaultWorkspace?.id || 'default',
+              })}
+              disabled={instanceType === 'embedded' ? !dbPath || connecting : !remoteHost || !instanceName || connecting}
               className="flex items-center gap-2 px-8 py-3 bg-teal hover:bg-teal/90 text-white rounded-lg font-semibold shadow-lg shadow-teal/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Connect <Icon name="arrow-right" size={14} />
+              {connecting ? 'Connecting...' : 'Connect'} <Icon name="arrow-right" size={14} />
             </button>
           </div>
         </div>
@@ -801,8 +1390,12 @@ function App() {
   const [results, setResults] = useState<{ columns: string[], rows: any[][] } | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [status, setStatus] = useState<any>(null);
+  const [connectionInfo, setConnectionInfo] = useState<any>(null);
   const [connected, setConnected] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
   const [theme, setTheme] = useState('dark');
 
   // Console state
@@ -822,14 +1415,33 @@ function App() {
   // Schema state
   const [tables, setTables] = useState<string[]>([]);
 
-  // Auto-connect effect
-  useEffect(() => {
-    const lastPath = localStorage.getItem("last_db_path");
-    if (lastPath) {
-      handleConnect(lastPath);
-    } else {
-      setShowConnectionModal(true);
+  const handleSwitchConnection = async () => {
+    try {
+      await studioDataClient.disconnect();
+    } catch {
+      // Best-effort: we still want to reopen the connection modal.
     }
+
+    setConnected(false);
+    setDemoMode(false);
+    setConnectionInfo(null);
+    setStatus(null);
+    setResults(null);
+    setQueryError(null);
+    setTables([]);
+    setKvKeys([]);
+    setSelectedKey(null);
+    setSelectedValue(null);
+    setSelectedTable('');
+    setConnectionError(null);
+    setShowConnectionModal(true);
+    setActiveTab('dashboard');
+  };
+
+  // Keep the connection flow explicit for now. Auto-connect is convenient,
+  // but it can mask backend lock issues while Studio is still stabilizing.
+  useEffect(() => {
+    setShowConnectionModal(true);
   }, []);
 
   // Poll stats
@@ -837,52 +1449,83 @@ function App() {
     if (!connected) return;
     const interval = setInterval(async () => {
       try {
-        const s = await invoke('get_stats');
+        const s = await studioDataClient.getStats();
         setStatus(s);
       } catch { /* ignore */ }
     }, 2000);
     return () => clearInterval(interval);
   }, [connected]);
 
-  const handleConnect = async (path: string) => {
+  // Re-sync visible surfaces when switching tabs so Overview/KV Explorer stay
+  // aligned with the latest database state instead of waiting on another action.
+  useEffect(() => {
+    if (!connected) return;
+
+    if (activeTab === 'dashboard' || activeTab === 'explorer' || activeTab === 'workbench') {
+      void loadTables();
+      void studioDataClient.getStats()
+        .then((freshStatus: unknown) => setStatus(freshStatus))
+        .catch(() => {
+          // Non-fatal: the polling loop will keep trying.
+        });
+    }
+  }, [activeTab, connected]);
+
+  const handleConnect = async (
+    path: string,
+    options?: { projectId?: string; projectName?: string; instanceId?: string; instanceName?: string; instanceType?: 'embedded' | 'remote'; host?: string; port?: number; apiKey?: string; tls?: boolean; workspaceId?: string }
+  ) => {
+    if (connecting || connected) {
+      return;
+    }
+
+    setConnecting(true);
+    setConnectionError(null);
+
     try {
-      await invoke('connect', { path });
+      const info = await studioDataClient.connect(path, options);
       setConnected(true);
+      setConnectionInfo(info);
+      setDemoMode(false);
+      setConnectionError(null);
       setShowConnectionModal(false);
-      localStorage.setItem("last_db_path", path);
+      if ((info?.instanceType || options?.instanceType || 'embedded') === 'embedded') {
+        localStorage.setItem("last_db_path", path);
+      }
       setActiveTab('dashboard');
       // Load initial data
       loadTables();
-    } catch (e) {
+    } catch (e: any) {
       console.error("Connection failed", e);
+      const message =
+        typeof e === 'string'
+          ? e
+          : e?.message
+            ? String(e.message)
+              : e
+                ? JSON.stringify(e)
+                : 'Connection failed';
+      setConnectionError(message);
       setShowConnectionModal(true);
+    } finally {
+      setConnecting(false);
     }
+  };
+
+  const handlePreview = () => {
+    setDemoMode(true);
+    setConnected(false);
+    setConnectionInfo(null);
+    setConnectionError(null);
+    setShowConnectionModal(false);
+    setActiveTab('workbench');
   };
 
   // Load tables from database
   const loadTables = async () => {
     try {
-      const res: any = await invoke('mcp_call_tool', {
-        toolName: 'sochdb_list_tables',
-        arguments: {}
-      });
-      if (res && res.content) {
-        // Parse table list from MCP response (toon format)
-        // Format: "results[N]{header}:\nrow1\nrow2\n..."
-        const content = res.content[0]?.text || '';
-        const lines = content.split('\n').filter((t: string) => t.trim());
-
-        // Skip the header line (starts with "results[")
-        const dataLines = lines.filter((line: string) => !line.startsWith('results['));
-
-        // Extract table names (first field before comma)
-        const tableNames = dataLines.map((line: string) => {
-          const parts = line.split(',');
-          return parts[0]?.trim() || '';
-        }).filter((name: string) => name && name !== 'null');
-
-        setTables(tableNames);
-      }
+      const tableNames = await studioDataClient.listTables();
+      setTables(tableNames);
     } catch (e) {
       console.error('Failed to load tables', e);
     }
@@ -892,32 +1535,23 @@ function App() {
   const createSampleData = async () => {
     try {
       // Create users table with sample data
-      await invoke('mcp_call_tool', {
-        toolName: 'sochdb_put',
-        arguments: { path: 'users/1', value: { id: 1, name: 'Alice', email: 'alice@example.com', role: 'admin' } }
-      });
-      await invoke('mcp_call_tool', {
-        toolName: 'sochdb_put',
-        arguments: { path: 'users/2', value: { id: 2, name: 'Bob', email: 'bob@example.com', role: 'user' } }
-      });
-      await invoke('mcp_call_tool', {
-        toolName: 'sochdb_put',
-        arguments: { path: 'users/3', value: { id: 3, name: 'Carol', email: 'carol@example.com', role: 'user' } }
-      });
+      await studioDataClient.mcpCallTool('sochdb_put', { path: 'users/1', value: { id: 1, name: 'Alice', email: 'alice@example.com', role: 'admin' } });
+      await studioDataClient.mcpCallTool('sochdb_put', { path: 'users/2', value: { id: 2, name: 'Bob', email: 'bob@example.com', role: 'user' } });
+      await studioDataClient.mcpCallTool('sochdb_put', { path: 'users/3', value: { id: 3, name: 'Carol', email: 'carol@example.com', role: 'user' } });
       // Create products table
-      await invoke('mcp_call_tool', {
-        toolName: 'sochdb_put',
-        arguments: { path: 'products/1', value: { id: 1, name: 'Widget', price: 29.99, stock: 100 } }
-      });
-      await invoke('mcp_call_tool', {
-        toolName: 'sochdb_put',
-        arguments: { path: 'products/2', value: { id: 2, name: 'Gadget', price: 49.99, stock: 50 } }
-      });
+      await studioDataClient.mcpCallTool('sochdb_put', { path: 'products/1', value: { id: 1, name: 'Widget', price: 29.99, stock: 100 } });
+      await studioDataClient.mcpCallTool('sochdb_put', { path: 'products/2', value: { id: 2, name: 'Gadget', price: 49.99, stock: 50 } });
+      try {
+        const freshStatus = await studioDataClient.getStats();
+        setStatus(freshStatus);
+      } catch {
+        // Non-fatal. The table refresh below is still the important path.
+      }
       setConsoleHistory(prev => [...prev,
       { type: 'output', text: '✓ Created sample data: users/1, users/2, users/3, products/1, products/2' }
       ]);
-      loadTables();
-      refreshKvExplorer();
+      await loadTables();
+      await refreshKvExplorer();
     } catch (e: any) {
       setConsoleHistory(prev => [...prev,
       { type: 'error', text: `Failed to create sample data: ${e?.message || e}` }
@@ -939,10 +1573,7 @@ function App() {
     setSelectedValue(null);
 
     try {
-      const scanRes: any = await invoke('mcp_call_tool', {
-        toolName: 'sochdb_query',
-        arguments: { query: `SELECT * FROM ${table}`, limit: 50, format: 'json' }
-      });
+      const scanRes: any = await studioDataClient.mcpCallTool('sochdb_query', { query: `SELECT * FROM ${table}`, limit: 50, format: 'json' });
 
       let keys: string[] = [];
 
@@ -985,10 +1616,7 @@ function App() {
   const getKeyValue = async (key: string) => {
     setSelectedKey(key);
     try {
-      const res: any = await invoke('mcp_call_tool', {
-        toolName: 'sochdb_get',
-        arguments: { path: key }
-      });
+      const res: any = await studioDataClient.mcpCallTool('sochdb_get', { path: key });
       if (res && res.content) {
         setSelectedValue(res.content[0]?.text || JSON.stringify(res, null, 2));
       }
@@ -1031,10 +1659,7 @@ function App() {
           return;
 
         case 'list':
-          const listRes: any = await invoke('mcp_call_tool', {
-            toolName: 'sochdb_list_tables',
-            arguments: {}
-          });
+          const listRes: any = await studioDataClient.mcpCallTool('sochdb_list_tables', {});
           const rawListOutput = listRes?.content?.[0]?.text || '';
           // Parse toon format and format nicely
           const listLines = rawListOutput.split('\n').filter((t: string) => t.trim());
@@ -1053,10 +1678,7 @@ function App() {
           if (parts.length < 2) {
             result = 'Usage: get <path>';
           } else {
-            const getRes: any = await invoke('mcp_call_tool', {
-              toolName: 'sochdb_get',
-              arguments: { path: parts[1] }
-            });
+            const getRes: any = await studioDataClient.mcpCallTool('sochdb_get', { path: parts[1] });
             result = getRes?.content?.[0]?.text || 'Not found';
           }
           break;
@@ -1068,10 +1690,7 @@ function App() {
             const path = parts[1];
             const valueStr = parts.slice(2).join(' ');
             const value = JSON.parse(valueStr);
-            await invoke('mcp_call_tool', {
-              toolName: 'sochdb_put',
-              arguments: { path, value }
-            });
+            await studioDataClient.mcpCallTool('sochdb_put', { path, value });
             result = `✓ Stored at ${path}`;
           }
           break;
@@ -1080,10 +1699,7 @@ function App() {
           if (parts.length < 2) {
             result = 'Usage: delete <path>';
           } else {
-            await invoke('mcp_call_tool', {
-              toolName: 'sochdb_delete',
-              arguments: { path: parts[1] }
-            });
+            await studioDataClient.mcpCallTool('sochdb_delete', { path: parts[1] });
             result = `✓ Deleted ${parts[1]}`;
           }
           break;
@@ -1092,10 +1708,7 @@ function App() {
           if (parts.length < 2) {
             result = 'Usage: describe <table>';
           } else {
-            const descRes: any = await invoke('mcp_call_tool', {
-              toolName: 'sochdb_describe',
-              arguments: { table: parts[1] }
-            });
+            const descRes: any = await studioDataClient.mcpCallTool('sochdb_describe', { table: parts[1] });
             result = descRes?.content?.[0]?.text || 'Table not found';
           }
           break;
@@ -1105,10 +1718,7 @@ function App() {
             result = 'Usage: query <sql>';
           } else {
             const queryStr = parts.slice(1).join(' ');
-            const queryRes: any = await invoke('mcp_call_tool', {
-              toolName: 'sochdb_query',
-              arguments: { query: queryStr }
-            });
+            const queryRes: any = await studioDataClient.mcpCallTool('sochdb_query', { query: queryStr });
             result = queryRes?.content?.[0]?.text || 'No results';
           }
           break;
@@ -1119,10 +1729,7 @@ function App() {
 
         default:
           // Try as a query
-          const defaultRes: any = await invoke('mcp_call_tool', {
-            toolName: 'sochdb_query',
-            arguments: { query: cmd }
-          });
+          const defaultRes: any = await studioDataClient.mcpCallTool('sochdb_query', { query: cmd });
           result = defaultRes?.content?.[0]?.text || 'Unknown command. Type "help" for available commands.';
       }
 
@@ -1137,7 +1744,7 @@ function App() {
     if (!query.trim()) return;
     setQueryError(null);
     try {
-      const res: any = await invoke('execute_query', { query });
+      const res: any = await studioDataClient.executeQuery(query);
       // Handle both array format (columns, rows) and object format
       if (res.columns && res.rows) {
         setResults({ columns: res.columns, rows: res.rows });
@@ -1157,6 +1764,10 @@ function App() {
   };
 
   const renderContent = () => {
+    const isRemoteOverview = connectionInfo?.instanceType === 'remote';
+    const connectionSummary = isRemoteOverview
+      ? (connectionInfo?.endpoint || 'Remote endpoint')
+      : (connectionInfo?.path || 'Embedded local database');
     switch (activeTab) {
       case 'dashboard':
         return (
@@ -1165,11 +1776,40 @@ function App() {
               <h1 className="text-3xl font-bold text-text-default mb-2 font-display">Overview</h1>
               <p className="text-text-muted">Real-time database performance metrics</p>
             </header>
+            {connectionInfo?.instanceType === 'remote' && (
+              <div className="mb-6 rounded-xl border border-border-info bg-background-info/10 px-4 py-3 text-sm text-text-info">
+                Remote instance connected via {connectionInfo?.endpoint || 'gRPC'}.
+                Studio currently exposes health, collection discovery, and metadata-oriented remote queries here.
+                Full remote MCP parity is still in progress.
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-              <StatCard icon="zap" label="MemTable Usage" value={status && typeof status.memtable_size_bytes === 'number' ? `${(status.memtable_size_bytes / 1024).toFixed(2)} KB` : '0 KB'} sub="Active Buffer" color="teal" />
+              <StatCard
+                icon="database"
+                label="Total Rows"
+                value={status?.total_rows?.toLocaleString?.() ?? '0'}
+                sub="Indexed records discovered"
+                color="teal"
+              />
               <StatCard icon="database" label="Tables" value={status?.total_tables ?? '0'} sub="Registered" color="orange" />
               <StatCard icon="check" label="Uptime" value={status?.uptime_seconds ? `${Math.floor(status.uptime_seconds / 60)}m ${status.uptime_seconds % 60}s` : '0s'} sub="Since Restart" color="blue" />
-              <StatCard icon="bug" label="Active Txns" value={status?.active_transactions ?? '0'} sub="In Progress" color="red" />
+              {isRemoteOverview ? (
+                <StatCard
+                  icon="layout"
+                  label="Namespaces"
+                  value={status?.namespace_count?.toLocaleString?.() ?? '1'}
+                  sub={status?.health_status ? `Remote health: ${status.health_status}` : 'Remote namespace inventory'}
+                  color="red"
+                />
+              ) : (
+                <StatCard
+                  icon="layout"
+                  label="Connection"
+                  value={connected ? 'Embedded' : 'Offline'}
+                  sub={connectionSummary}
+                  color="red"
+                />
+              )}
             </div>
 
             {/* Tables Section */}
@@ -1200,6 +1840,8 @@ function App() {
             </div>
           </div>
         );
+      case 'workbench':
+        return <WorkbenchView connected={connected} appTables={tables} appStatus={status} appConnection={connectionInfo} />;
       case 'query':
         return (
           <div className="flex flex-col h-full animate-in pr-3 pb-3 pt-3">
@@ -1259,7 +1901,7 @@ function App() {
       case 'assistant':
         return <AssistantView />;
       case 'settings':
-        return <SettingsView theme={theme} setTheme={setTheme} connected={connected} />;
+        return <SettingsView theme={theme} setTheme={setTheme} connected={connected} connectionInfo={connectionInfo} />;
       case 'console':
         return (
           <div className="flex flex-col h-full animate-in p-8">
@@ -1427,14 +2069,29 @@ function App() {
 
   return (
     <div className="h-screen w-screen bg-mesh text-text-default flex flex-col overflow-hidden font-sans selection:bg-teal/30">
-      <TitleBar />
       <div className="flex-1 flex overflow-hidden">
-        {connected && <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} connected={connected} />}
+        {(connected || demoMode) && (
+          <Sidebar
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            connected={connected}
+            onSwitchConnection={() => void handleSwitchConnection()}
+          />
+        )}
         <main className="flex-1 overflow-hidden relative">
           {renderContent()}
         </main>
       </div>
-      {showConnectionModal && <ConnectionModal onConnect={handleConnect} />}
+      {showConnectionModal && (
+        <ConnectionModal
+          onConnect={handleConnect}
+          onPreview={handlePreview}
+          errorMessage={connectionError}
+          connecting={connecting}
+          clientMode={studioClientMode}
+          backendBaseUrl={studioBackendBaseUrl}
+        />
+      )}
     </div>
   );
 }
